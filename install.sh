@@ -7,14 +7,15 @@
 #   - Ensure required tools (jq and bc) are installed (bc via Entware if needed).
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
-#   - Ask if you want to manually specify a threshold speed or use auto-threshold calibration.
-#   - Ask separately for scheduling options for Speed Test and Update modes.
-#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
+#   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
+#   - Ask separately for scheduling a Speed Test job and an Update job.
+#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) with your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
-#   - If auto-threshold was chosen, prompt to run the main script immediately with --autothreshold --update.
+#   - If auto‑threshold was selected, prompt to run the main script immediately with --autothreshold and --update.
 #
 # Requirements: Asuswrt-Merlin router with JFFS enabled.
 
+# Bail out on error
 set -e
 
 # Colors
@@ -44,7 +45,7 @@ jffs_enabled=$(nvram get jffs2_scripts)
 printf "JFFS partition: "
 if [ "$jffs_enabled" != "1" ]; then
     echo -e "${col_r}disabled${col_n}"
-    echo "Enable the JFFS partition on your router's Administration -> System."
+    echo "Enable the JFFS partition on your router's Administration -> System page."
     fail
 else
     echo -e "${col_g}enabled${col_n}"
@@ -90,7 +91,7 @@ if [ -x /opt/bin/bc ] || [ -x /usr/bin/bc ] || [ -x /bin/bc ]; then
 else
     echo -e "${col_y}bc not found. Attempting to install bc via Entware...${col_n}"
     if command -v opkg >/dev/null 2>&1; then
-        opkg update && opkg install bc || { echo "Failed to install bc"; fail; }
+        opkg update && opkg install bc || { echo "Failed to install bc with opkg"; fail; }
     else
         echo -e "${col_r}opkg not found. Please install bc manually.${col_n}"
         fail
@@ -164,7 +165,7 @@ case "$thresh_option" in
         SPEED_THRESHOLD="$manual_thresh"
         ;;
     2)
-        SPEED_THRESHOLD="9999"  # Default value for auto-threshold; will be updated later.
+        SPEED_THRESHOLD="9999"  # Default dummy value; auto-threshold will update this.
         ;;
     *)
         echo -e "${col_r}Invalid selection.${col_n}"
@@ -173,54 +174,53 @@ case "$thresh_option" in
 esac
 
 # --- Scheduling Options ---
-# Function to prompt for cron schedule using friendly options.
-prompt_for_cron() {
-    echo "Choose scheduling frequency:"
-    echo "[1] Every X minutes"
-    echo "[2] Every X hours"
-    echo "[3] Daily"
-    echo "[4] Weekly"
-    echo "[5] Monthly"
-    read -r choice
-    case "$choice" in
+build_cron() {
+    echo "Select scheduling option:"
+    echo "1) Every X minutes"
+    echo "2) Every X hours"
+    echo "3) Daily"
+    echo "4) Weekly"
+    echo "5) Monthly"
+    read -r sched_opt
+    case "$sched_opt" in
         1)
-            echo "Enter the number of minutes (e.g., 15):"
-            read -r minutes
-            echo "*/$minutes * * * *"
+            echo "Enter the interval in minutes (e.g., 5):"
+            read -r interval
+            echo "*/$interval * * * *"
             ;;
         2)
-            echo "Enter the number of hours (e.g., 2):"
-            read -r hours
-            echo "0 */$hours * * *"
+            echo "Enter the interval in hours (e.g., 2):"
+            read -r interval
+            echo "0 */$interval * * *"
             ;;
         3)
-            echo "Enter time in 24-hour format (HH:MM):"
+            echo "Enter the time for daily execution (HH:MM, 24-hour):"
             read -r time_str
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            minute=$(echo "$time_str" | cut -d: -f2)
+            hour=$(echo "$time_str" | cut -d: -f1)
             echo "$minute $hour * * *"
             ;;
         4)
-            echo "Enter day of week (0=Sunday, 6=Saturday):"
+            echo "Enter the day of week (0=Sunday ... 6=Saturday):"
             read -r dow
-            echo "Enter time in 24-hour format (HH:MM):"
+            echo "Enter the time for weekly execution (HH:MM, 24-hour):"
             read -r time_str
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            minute=$(echo "$time_str" | cut -d: -f2)
+            hour=$(echo "$time_str" | cut -d: -f1)
             echo "$minute $hour * * $dow"
             ;;
         5)
-            echo "Enter day of month (1-31):"
+            echo "Enter the day of month (1-31):"
             read -r dom
-            echo "Enter time in 24-hour format (HH:MM):"
+            echo "Enter the time for monthly execution (HH:MM, 24-hour):"
             read -r time_str
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            minute=$(echo "$time_str" | cut -d: -f2)
+            hour=$(echo "$time_str" | cut -d: -f1)
             echo "$minute $hour $dom * *"
             ;;
         *)
-            echo "Invalid option. No scheduling will be set."
-            echo ""
+            echo "Invalid option" >&2
+            exit 1
             ;;
     esac
 }
@@ -228,19 +228,19 @@ prompt_for_cron() {
 echo "Do you want to schedule a Speed Test job? [Y/n]"
 read -r sched_speed_opt
 if [ -z "$sched_speed_opt" ] || echo "$sched_speed_opt" | grep -qi "^y"; then
-    echo "Schedule for Speed Test:"
-    SCHEDULE_SPEED=$(prompt_for_cron)
+    echo "Schedule Speed Test:"
+    CRON_SPEED=$(build_cron)
 else
-    SCHEDULE_SPEED=""
+    CRON_SPEED=""
 fi
 
 echo "Do you want to schedule an Update job? [Y/n]"
 read -r sched_update_opt
 if [ -z "$sched_update_opt" ] || echo "$sched_update_opt" | grep -qi "^y"; then
-    echo "Schedule for Update:"
-    SCHEDULE_UPDATE=$(prompt_for_cron)
+    echo "Schedule Update:"
+    CRON_UPDATE=$(build_cron)
 else
-    SCHEDULE_UPDATE=""
+    CRON_UPDATE=""
 fi
 
 # --- Build the Configuration File ---
@@ -295,12 +295,12 @@ chmod a+rx "$SCRIPT_PATH"
 echo -e "${col_g}vpn-speedtest-monitor.sh installed successfully.${col_n}"
 
 # --- Schedule the Scripts if Requested ---
-if [ -n "$SCHEDULE_SPEED" ]; then
+if [ -n "$CRON_SPEED" ]; then
     JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
     LOG_FILE_SPEED="/var/log/vpn-speedtest-monitor-${client_instance}-speed.log"
-    # Remove any existing Speed Test job for this client.
+    # Remove any existing job for this config
     sed -i "/$JOB_ID_SPEED/d" /jffs/scripts/services-start
-    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > $LOG_FILE_SPEED 2>&1\""
+    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$CRON_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > $LOG_FILE_SPEED 2>&1\""
     echo "Adding Speed Test schedule: $CRU_CMD_SPEED"
     eval "$CRU_CMD_SPEED"
     echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
@@ -309,12 +309,11 @@ else
     echo -e "${col_y}No Speed Test scheduled task set up.${col_n}"
 fi
 
-if [ -n "$SCHEDULE_UPDATE" ]; then
+if [ -n "$CRON_UPDATE" ]; then
     JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
     LOG_FILE_UPDATE="/var/log/vpn-speedtest-monitor-${client_instance}-update.log"
-    # Remove any existing Update job for this client.
     sed -i "/$JOB_ID_UPDATE/d" /jffs/scripts/services-start
-    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > $LOG_FILE_UPDATE 2>&1\""
+    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$CRON_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > $LOG_FILE_UPDATE 2>&1\""
     echo "Adding Update schedule: $CRU_CMD_UPDATE"
     eval "$CRU_CMD_UPDATE"
     echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
@@ -329,7 +328,8 @@ if [ "$thresh_option" = "2" ]; then
     read -r run_now
     if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
         echo "Running auto-threshold speed test..."
-        /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --update
+        # Note: We add --update flag to force an update.
+        /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --speedtest --update
     fi
 fi
 
