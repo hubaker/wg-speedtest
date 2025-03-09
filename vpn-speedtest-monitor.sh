@@ -314,4 +314,154 @@ update_vpn_config() {
         sleep 2
         log "Checking VPN connectivity (attempt $attempt of $MAX_ATTEMPTS)..."
         if ping -I "$CLIENT_INSTANCE" -c 5 -W 5 "$TEST_IP" >/dev/null 2>&1; then
-      
+            log "VPN connectivity check succeeded with server ${GREEN}$candidate_server ($candidate_ip)${NC}."
+            success=1
+            break
+        else
+            log "VPN connectivity check failed with server ${RED}$candidate_server ($candidate_ip)${NC}."
+        fi
+        attempt=$(( attempt + 1 ))
+        log ""
+    done
+    if [ $success -ne 1 ]; then
+        log "Warning: VPN connectivity check failed after $MAX_ATTEMPTS attempts. Please check your VPN configuration."
+        exit 1
+    fi
+}
+
+###############################################################################
+#                        AUTO-THRESHOLD CALCULATION                           #
+###############################################################################
+if [ "$autothreshold_mode" = true ]; then
+    log "Running auto-threshold calibration..."
+
+    # Step 1: Measure WAN speed over 5 tests
+    WAN_IF=$(nvram get wan0_ifname)
+    WAN_SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I $WAN_IF -f json"
+    total_wan_speed=0
+    num_tests=5
+    i=1
+    while [ $i -le $num_tests ]; do
+        result=$($WAN_SPEEDTEST_CMD 2>/dev/null)
+        spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth')
+        if echo "$spd" | grep -qE '^[0-9]+$'; then
+            spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
+            total_wan_speed=$(echo "$total_wan_speed + $spd_mbps" | bc)
+        else
+            log "Warning: Invalid WAN speed test result: $spd"
+        fi
+        i=$(( i + 1 ))
+    done
+    WAN_avg=$(echo "scale=2; $total_wan_speed / $num_tests" | bc)
+    log "WAN average speed: $WAN_avg Mbps"
+
+    # Step 2: Test recommended servers via the VPN tunnel
+    orig_ep=$(nvram get "${CLIENT_INSTANCE}_ep_addr")
+    orig_desc=$(nvram get "${CLIENT_INSTANCE}_desc")
+    curl -s "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .station' > /tmp/Peers.txt
+    rec_servers=""
+    rec_ips=""
+    index=0
+    while IFS= read -r line; do
+        case $(( index % 2 )) in
+            0) rec_servers="$rec_servers $line" ;;
+            1) rec_ips="$rec_ips $line" ;;
+        esac
+        index=$(( index + 1 ))
+    done < /tmp/Peers.txt
+    rm /tmp/Peers.txt
+    total_tunnel_speed=0
+    tunnel_count=0
+    j=1
+    for server in $rec_servers; do
+        ip=$(echo "$rec_ips" | awk -v idx="$j" '{print $idx}')
+        log "Testing tunnel speed for server: $server ($ip)"
+        nvram set "${CLIENT_INSTANCE}_ep_addr"="$server"
+        nvram set "${CLIENT_INSTANCE}_desc"="$server ($ip)"
+        nvram commit
+        service restart_wgc
+        sleep 2
+        result=$($SPEEDTEST_CMD 2>/dev/null)
+        spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth')
+        if echo "$spd" | grep -qE '^[0-9]+$'; then
+            spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
+            total_tunnel_speed=$(echo "$total_tunnel_speed + $spd_mbps" | bc)
+            tunnel_count=$(( tunnel_count + 1 ))
+            log "  Speed: $spd_mbps Mbps"
+        else
+            log "Warning: Invalid tunnel speed test for server $server: $spd"
+        fi
+        j=$(( j + 1 ))
+    done
+    if [ $tunnel_count -gt 0 ]; then
+        Tunnel_avg=$(echo "scale=2; $total_tunnel_speed / $tunnel_count" | bc)
+    else
+        Tunnel_avg=0
+    fi
+    log "Tunnel average speed: $Tunnel_avg Mbps"
+
+    # Step 3: Calculate dynamic threshold:
+    overhead=$(echo "$WAN_avg - $Tunnel_avg" | bc)
+    dynamic_threshold=$(echo "scale=2; $Tunnel_avg - ($overhead * 0.5)" | bc)
+    log "Calculated dynamic threshold: $dynamic_threshold Mbps"
+
+    nvram set "${CLIENT_INSTANCE}_ep_addr"="$orig_ep"
+    nvram set "${CLIENT_INSTANCE}_desc"="$orig_desc"
+    nvram commit
+
+    SPEED_THRESHOLD="$dynamic_threshold"
+    sed -i "s/^SPEED_THRESHOLD=.*/SPEED_THRESHOLD=\"$dynamic_threshold\"/" "$CONFIG_FILE"
+    log "Config file updated with new SPEED_THRESHOLD."
+    
+    # Force a speed test using the new threshold.
+    speedtest_mode=true
+fi
+
+###############################################################################
+#                              MAIN SCRIPT                                    #
+###############################################################################
+log ""
+echo -e "${MAGENTA}****************************  Starting VPN speed test/update  ****************************${NC}"
+log ""
+
+update_triggered=false
+
+if [ "$speedtest_mode" = true ]; then
+    log "Starting VPN speed test"
+    SPEED_JSON=$($SPEEDTEST_CMD 2>/dev/null)
+    SPEED_RESULT=$(echo "$SPEED_JSON" | /opt/usr/bin/jq -r '.download.bandwidth')
+    if ! echo "$SPEED_RESULT" | grep -qE '^[0-9]+$'; then
+        log "Warning: Invalid speed test result: $SPEED_RESULT"
+        exit 1
+    fi
+    SPEED_Mbps=$(echo "$SPEED_RESULT" | awk '{printf "%.2f", $1 / 125000}')
+    speedComp1=$(less_than "$SPEED_Mbps" 100)
+    speedComp2=$(less_than "$SPEED_Mbps" 200)
+    if [ "$speedComp1" -eq 1 ]; then
+        colored_speed="${RED}${SPEED_Mbps}${NC}"
+    elif [ "$speedComp2" -eq 1 ]; then
+        colored_speed="${YELLOW}${SPEED_Mbps}${NC}"
+    else
+        colored_speed="${GREEN}${SPEED_Mbps}${NC}"
+    fi
+    log "Current VPN Download Speed: $colored_speed Mbps"
+    log ""
+    speedCheck=$(bc_strip "$SPEED_Mbps < $SPEED_THRESHOLD")
+    if [ "$speedCheck" -eq 1 ]; then
+        log "Speed is below threshold ($SPEED_THRESHOLD Mbps). Updating VPN configuration..."
+        update_vpn_config
+        update_triggered=true
+    else
+        log "Speed is acceptable. No VPN update triggered by speed test."
+    fi
+fi
+
+if [ "$update_mode" = true ] && [ "$update_triggered" = false ]; then
+    log "Forcing VPN configuration update..."
+    update_vpn_config
+fi
+
+log ""
+echo -e "${GREEN}==== Script Finished ====${NC}"
+log ""
+exit 0
