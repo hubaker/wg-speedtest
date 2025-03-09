@@ -7,14 +7,14 @@
 #   - Ensure required tools (jq and bc) are installed (bc via Entware if needed).
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
-#   - Ask if you want to manually specify a threshold speed or use auto-threshold calibration.
-#   - Optionally ask for scheduling details.
-#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
+#   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
+#   - Ask separately if you want to create a scheduled job for Speed Test mode and for Update mode.
+#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) with your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
+#   - If auto‑threshold was chosen, prompt to run the main script immediately with --autothreshold.
 #
 # Requirements: Asuswrt-Merlin router with JFFS enabled.
 
-# Bail out on error
 set -e
 
 # Colors
@@ -30,7 +30,6 @@ fail() {
 }
 
 # --- System Checks ---
-# Check Asuswrt-Merlin version
 buildno=$(nvram get buildno)
 printf "Asuswrt-Merlin version: "
 if [ "$(echo "$buildno" | cut -f1 -d.)" -lt 388 ]; then
@@ -41,12 +40,11 @@ else
     echo -e "${col_g}${buildno}${col_n}"
 fi
 
-# Check if JFFS partition is enabled
 jffs_enabled=$(nvram get jffs2_scripts)
 printf "JFFS partition: "
 if [ "$jffs_enabled" != "1" ]; then
     echo -e "${col_r}disabled${col_n}"
-    echo "Enable the JFFS partition on your router's Administration -> System page."
+    echo "Enable JFFS in Administration -> System."
     fail
 else
     echo -e "${col_g}enabled${col_n}"
@@ -69,7 +67,7 @@ case "$arch" in
     *)
         if ! [ -f "$jq_file" ]; then
             echo -e "${col_r}${arch}${col_n}"
-            echo "Unsupported architecture or jq not found. Please install jq manually."
+            echo "Unsupported architecture or jq not found."
             fail
         else
             echo -e "$jq_file: ${col_y}installed manually${col_n}"
@@ -92,7 +90,7 @@ if [ -x /opt/bin/bc ] || [ -x /usr/bin/bc ] || [ -x /bin/bc ]; then
 else
     echo -e "${col_y}bc not found. Attempting to install bc via Entware...${col_n}"
     if command -v opkg >/dev/null 2>&1; then
-        opkg update && opkg install bc || { echo "Failed to install bc with opkg"; fail; }
+        opkg update && opkg install bc || { echo "Failed to install bc"; fail; }
     else
         echo -e "${col_r}opkg not found. Please install bc manually.${col_n}"
         fail
@@ -123,7 +121,6 @@ if [ $client_count -lt 1 ]; then
     fail
 fi
 
-# Let the user select a VPN client instance
 while true; do
     printf "Select the VPN client instance for speed testing [1-%s, e: exit]: " "$client_count"
     read -r index
@@ -167,7 +164,7 @@ case "$thresh_option" in
         SPEED_THRESHOLD="$manual_thresh"
         ;;
     2)
-        SPEED_THRESHOLD="370"  # Dummy initial value; will be auto-calibrated later.
+        SPEED_THRESHOLD="370"  # Dummy initial value; auto-threshold will update this.
         ;;
     *)
         echo -e "${col_r}Invalid selection.${col_n}"
@@ -175,30 +172,26 @@ case "$thresh_option" in
         ;;
 esac
 
-# --- Scheduling Option ---
-echo "Do you want to schedule the script? [Y/n]"
-read -r schedule_opt
-if [ -z "$schedule_opt" ] || echo "$schedule_opt" | grep -qi "^y"; then
-    echo "Enter the desired cron schedule (e.g., '*/15 * * * *' for every 15 minutes):"
-    read -r cron_schedule
-    SCHEDULE_CRON="$cron_schedule"
+# --- Scheduling Options ---
+# Ask separately for Speed Test schedule and Update schedule.
+echo "Do you want to schedule a Speed Test job? [Y/n]"
+read -r sched_speed_opt
+if [ -z "$sched_speed_opt" ] || echo "$sched_speed_opt" | grep -qi "^y"; then
+    echo "Enter the desired cron schedule for Speed Test (e.g., '*/15 * * * *'):"
+    read -r cron_speed
+    SCHEDULE_SPEED="$cron_speed"
 else
-    SCHEDULE_CRON=""
+    SCHEDULE_SPEED=""
 fi
 
-if [ -n "$SCHEDULE_CRON" ]; then
-    echo "Which mode do you want to schedule?"
-    echo "[1] Speed Test Mode (default)"
-    echo "[2] Update Mode"
-    read -r mode_opt
-    case "$mode_opt" in
-        2)
-            SCHEDULE_MODE="--update"
-            ;;
-        *)
-            SCHEDULE_MODE="--speedtest"
-            ;;
-    esac
+echo "Do you want to schedule an Update job? [Y/n]"
+read -r sched_update_opt
+if [ -z "$sched_update_opt" ] || echo "$sched_update_opt" | grep -qi "^y"; then
+    echo "Enter the desired cron schedule for Update (e.g., '0 */2 * * *'):"
+    read -r cron_update
+    SCHEDULE_UPDATE="$cron_update"
+else
+    SCHEDULE_UPDATE=""
 fi
 
 # --- Build the Configuration File ---
@@ -252,18 +245,41 @@ wget -qO "$SCRIPT_PATH" "https://raw.githubusercontent.com/hubaker/wg-speedtest/
 chmod a+rx "$SCRIPT_PATH"
 echo -e "${col_g}vpn-speedtest-monitor.sh installed successfully.${col_n}"
 
-# --- Schedule the Script if Requested ---
-if [ -n "$SCHEDULE_CRON" ]; then
-    JOB_ID="vpn-speedtest-monitor-${client_instance}"
-    LOG_FILE_SCHED="/var/log/vpn-speedtest-monitor-${client_instance}.log"
-    CRU_CMD="cru a $JOB_ID \"$SCHEDULE_CRON /bin/sh $SCRIPT_PATH $CONFIG_FILE $SCHEDULE_MODE > $LOG_FILE_SCHED 2>&1\""
-    echo "Adding schedule: $CRU_CMD"
-    eval "$CRU_CMD"
-    sed -i "/$JOB_ID/d" /jffs/scripts/services-start
-    echo "$CRU_CMD" >> /jffs/scripts/services-start
-    echo -e "${col_g}Scheduled task set up.${col_n}"
+# --- Schedule the Scripts if Requested ---
+if [ -n "$SCHEDULE_SPEED" ]; then
+    JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
+    LOG_FILE_SPEED="/var/log/vpn-speedtest-monitor-${client_instance}-speed.log"
+    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > $LOG_FILE_SPEED 2>&1\""
+    echo "Adding Speed Test schedule: $CRU_CMD_SPEED"
+    eval "$CRU_CMD_SPEED"
+    sed -i "/$JOB_ID_SPEED/d" /jffs/scripts/services-start
+    echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
+    echo -e "${col_g}Speed Test scheduled task set up.${col_n}"
 else
-    echo -e "${col_y}No scheduled task set up.${col_n}"
+    echo -e "${col_y}No Speed Test scheduled task set up.${col_n}"
+fi
+
+if [ -n "$SCHEDULE_UPDATE" ]; then
+    JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
+    LOG_FILE_UPDATE="/var/log/vpn-speedtest-monitor-${client_instance}-update.log"
+    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > $LOG_FILE_UPDATE 2>&1\""
+    echo "Adding Update schedule: $CRU_CMD_UPDATE"
+    eval "$CRU_CMD_UPDATE"
+    sed -i "/$JOB_ID_UPDATE/d" /jffs/scripts/services-start
+    echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
+    echo -e "${col_g}Update scheduled task set up.${col_n}"
+else
+    echo -e "${col_y}No Update scheduled task set up.${col_n}"
+fi
+
+# --- Auto-Threshold Immediate Run Option ---
+if [ "$thresh_option" = "2" ]; then
+    echo "Do you want to run an auto-threshold speed test now? [Y/n]"
+    read -r run_now
+    if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
+        echo "Running auto-threshold speed test..."
+        /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --speedtest
+    fi
 fi
 
 echo -e "${col_g}Installation completed successfully.${col_n}"

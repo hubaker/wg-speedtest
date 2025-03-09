@@ -14,8 +14,9 @@
 #
 # Additionally, there is an AutoThreshold mode (--autothreshold) which:
 #    - Runs 5 WAN speed tests to compute the average raw connection speed.
-#    - Fetches 5 recommended servers (using RECOMMENDED_API_URL) and runs 1 speed test on each
-#      (using the VPN interface) to compute an average tunnel speed.
+#    - Fetches recommended servers (using RECOMMENDED_API_URL) using the WAN interface
+#      to ensure connectivity, extracts hostname, load, station (IP) and public key,
+#      and then applies the best candidate.
 #    - Calculates a dynamic threshold and updates the configuration file.
 #
 # Usage examples:
@@ -229,8 +230,9 @@ update_vpn_config() {
     echo -e "\n${BLUE}================= Fetching new recommended servers... =================${NC}"
     log "Fetching new recommended servers"
     
-    # Query for 4 values per server: hostname, load, station (IP), and public_key.
-    curl -s "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .load, .station, ((.technologies[] | select(.identifier=="wireguard_udp") | (.metadata[]? | select(.name=="public_key") | .value)) // "")' > /tmp/Peers.txt
+    # Use the WAN interface to fetch server info.
+    WAN_IF=$(nvram get wan0_ifname)
+    curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .load, .station, ((.technologies[] | select(.identifier=="wireguard_udp") | (.metadata[]? | select(.name=="public_key") | .value)) // "")' > /tmp/Peers.txt
 
     servers=""
     loads=""
@@ -335,7 +337,7 @@ update_vpn_config() {
 if [ "$autothreshold_mode" = true ]; then
     log "Running auto-threshold calibration..."
 
-    # Step 1: Measure WAN speed over 5 tests
+    # Step 1: Measure WAN speed over 5 tests using the WAN interface.
     WAN_IF=$(nvram get wan0_ifname)
     WAN_SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I $WAN_IF -f json"
     total_wan_speed=0
@@ -355,10 +357,10 @@ if [ "$autothreshold_mode" = true ]; then
     WAN_avg=$(echo "scale=2; $total_wan_speed / $num_tests" | bc)
     log "WAN average speed: $WAN_avg Mbps"
 
-    # Step 2: Test recommended servers via the VPN tunnel
+    # Step 2: Test recommended servers via the WAN interface.
     orig_ep=$(nvram get "${CLIENT_INSTANCE}_ep_addr")
     orig_desc=$(nvram get "${CLIENT_INSTANCE}_desc")
-    curl -s "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .station' > /tmp/Peers.txt
+    curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .station' > /tmp/Peers.txt
     rec_servers=""
     rec_ips=""
     index=0
@@ -400,7 +402,7 @@ if [ "$autothreshold_mode" = true ]; then
     fi
     log "Tunnel average speed: $Tunnel_avg Mbps"
 
-    # Step 3: Calculate dynamic threshold:
+    # Step 3: Calculate dynamic threshold.
     overhead=$(echo "$WAN_avg - $Tunnel_avg" | bc)
     dynamic_threshold=$(echo "scale=2; $Tunnel_avg - ($overhead * 0.5)" | bc)
     log "Calculated dynamic threshold: $dynamic_threshold Mbps"
