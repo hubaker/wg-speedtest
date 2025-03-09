@@ -7,11 +7,11 @@
 #   - Ensure required tools (jq and bc) are installed (bc via Entware if needed).
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
-#   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
-#   - Ask separately if you want to create a scheduled job for Speed Test mode and for Update mode.
-#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) with your settings.
+#   - Ask if you want to manually specify a threshold speed or use auto-threshold calibration.
+#   - Ask separately for scheduling options for Speed Test and Update modes.
+#   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
-#   - If auto‑threshold was chosen, prompt to run the main script immediately with --autothreshold.
+#   - If auto-threshold was chosen, prompt to run the main script immediately with --autothreshold --update.
 #
 # Requirements: Asuswrt-Merlin router with JFFS enabled.
 
@@ -44,7 +44,7 @@ jffs_enabled=$(nvram get jffs2_scripts)
 printf "JFFS partition: "
 if [ "$jffs_enabled" != "1" ]; then
     echo -e "${col_r}disabled${col_n}"
-    echo "Enable JFFS in Administration -> System."
+    echo "Enable the JFFS partition on your router's Administration -> System."
     fail
 else
     echo -e "${col_g}enabled${col_n}"
@@ -67,7 +67,7 @@ case "$arch" in
     *)
         if ! [ -f "$jq_file" ]; then
             echo -e "${col_r}${arch}${col_n}"
-            echo "Unsupported architecture or jq not found."
+            echo "Unsupported architecture or jq not found. Please install jq manually."
             fail
         else
             echo -e "$jq_file: ${col_y}installed manually${col_n}"
@@ -164,7 +164,7 @@ case "$thresh_option" in
         SPEED_THRESHOLD="$manual_thresh"
         ;;
     2)
-        SPEED_THRESHOLD="370"  # Dummy initial value; auto-threshold will update this.
+        SPEED_THRESHOLD="9999"  # Default value for auto-threshold; will be updated later.
         ;;
     *)
         echo -e "${col_r}Invalid selection.${col_n}"
@@ -173,13 +173,63 @@ case "$thresh_option" in
 esac
 
 # --- Scheduling Options ---
-# Ask separately for Speed Test schedule and Update schedule.
+# Function to prompt for cron schedule using friendly options.
+prompt_for_cron() {
+    echo "Choose scheduling frequency:"
+    echo "[1] Every X minutes"
+    echo "[2] Every X hours"
+    echo "[3] Daily"
+    echo "[4] Weekly"
+    echo "[5] Monthly"
+    read -r choice
+    case "$choice" in
+        1)
+            echo "Enter the number of minutes (e.g., 15):"
+            read -r minutes
+            echo "*/$minutes * * * *"
+            ;;
+        2)
+            echo "Enter the number of hours (e.g., 2):"
+            read -r hours
+            echo "0 */$hours * * *"
+            ;;
+        3)
+            echo "Enter time in 24-hour format (HH:MM):"
+            read -r time_str
+            hour=$(echo "$time_str" | cut -d':' -f1)
+            minute=$(echo "$time_str" | cut -d':' -f2)
+            echo "$minute $hour * * *"
+            ;;
+        4)
+            echo "Enter day of week (0=Sunday, 6=Saturday):"
+            read -r dow
+            echo "Enter time in 24-hour format (HH:MM):"
+            read -r time_str
+            hour=$(echo "$time_str" | cut -d':' -f1)
+            minute=$(echo "$time_str" | cut -d':' -f2)
+            echo "$minute $hour * * $dow"
+            ;;
+        5)
+            echo "Enter day of month (1-31):"
+            read -r dom
+            echo "Enter time in 24-hour format (HH:MM):"
+            read -r time_str
+            hour=$(echo "$time_str" | cut -d':' -f1)
+            minute=$(echo "$time_str" | cut -d':' -f2)
+            echo "$minute $hour $dom * *"
+            ;;
+        *)
+            echo "Invalid option. No scheduling will be set."
+            echo ""
+            ;;
+    esac
+}
+
 echo "Do you want to schedule a Speed Test job? [Y/n]"
 read -r sched_speed_opt
 if [ -z "$sched_speed_opt" ] || echo "$sched_speed_opt" | grep -qi "^y"; then
-    echo "Enter the desired cron schedule for Speed Test (e.g., '*/15 * * * *'):"
-    read -r cron_speed
-    SCHEDULE_SPEED="$cron_speed"
+    echo "Schedule for Speed Test:"
+    SCHEDULE_SPEED=$(prompt_for_cron)
 else
     SCHEDULE_SPEED=""
 fi
@@ -187,9 +237,8 @@ fi
 echo "Do you want to schedule an Update job? [Y/n]"
 read -r sched_update_opt
 if [ -z "$sched_update_opt" ] || echo "$sched_update_opt" | grep -qi "^y"; then
-    echo "Enter the desired cron schedule for Update (e.g., '0 */2 * * *'):"
-    read -r cron_update
-    SCHEDULE_UPDATE="$cron_update"
+    echo "Schedule for Update:"
+    SCHEDULE_UPDATE=$(prompt_for_cron)
 else
     SCHEDULE_UPDATE=""
 fi
@@ -249,10 +298,11 @@ echo -e "${col_g}vpn-speedtest-monitor.sh installed successfully.${col_n}"
 if [ -n "$SCHEDULE_SPEED" ]; then
     JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
     LOG_FILE_SPEED="/var/log/vpn-speedtest-monitor-${client_instance}-speed.log"
+    # Remove any existing Speed Test job for this client.
+    sed -i "/$JOB_ID_SPEED/d" /jffs/scripts/services-start
     CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > $LOG_FILE_SPEED 2>&1\""
     echo "Adding Speed Test schedule: $CRU_CMD_SPEED"
     eval "$CRU_CMD_SPEED"
-    sed -i "/$JOB_ID_SPEED/d" /jffs/scripts/services-start
     echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
     echo -e "${col_g}Speed Test scheduled task set up.${col_n}"
 else
@@ -262,10 +312,11 @@ fi
 if [ -n "$SCHEDULE_UPDATE" ]; then
     JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
     LOG_FILE_UPDATE="/var/log/vpn-speedtest-monitor-${client_instance}-update.log"
+    # Remove any existing Update job for this client.
+    sed -i "/$JOB_ID_UPDATE/d" /jffs/scripts/services-start
     CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > $LOG_FILE_UPDATE 2>&1\""
     echo "Adding Update schedule: $CRU_CMD_UPDATE"
     eval "$CRU_CMD_UPDATE"
-    sed -i "/$JOB_ID_UPDATE/d" /jffs/scripts/services-start
     echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
     echo -e "${col_g}Update scheduled task set up.${col_n}"
 else
@@ -278,7 +329,7 @@ if [ "$thresh_option" = "2" ]; then
     read -r run_now
     if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
         echo "Running auto-threshold speed test..."
-        /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --speedtest
+        /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --update
     fi
 fi
 
