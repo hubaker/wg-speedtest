@@ -7,11 +7,11 @@
 #   - Ensure required tools (jq and bc) are installed (bc via Entware if needed).
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
-#   - Ask if you want to manually specify a threshold speed or use auto-threshold calibration.
+#   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
 #   - Ask separately for scheduling options for Speed Test and Update modes.
 #   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
-#   - If auto-threshold was chosen, run the main script immediately with --autothreshold --update.
+#   - If auto‑threshold was chosen, run the main script immediately with --autothreshold --update.
 #
 # Requirements: Asuswrt-Merlin router with JFFS enabled.
 
@@ -123,7 +123,7 @@ fi
 
 while true; do
     printf "Select the VPN client instance for speed testing [1-%s, e: exit]: " "$client_count"
-    read -r index < /dev/tty
+    read -r index
     index=$(echo "$index" | xargs)
     if [ "$index" = "e" ] || [ "$index" = "E" ]; then
         echo "Bye"
@@ -140,13 +140,13 @@ echo -e "${col_g}Selected VPN client instance: ${client_instance}${col_n}"
 
 # --- Recommended Servers Selection ---
 echo "Do you want to use the standard recommended servers? [Y/n]"
-read -r use_standard < /dev/tty
+read -r use_standard
 use_standard=$(echo "$use_standard" | tr '[:upper:]' '[:lower:]')
 if [ "$use_standard" = "n" ]; then
-    echo "Enter the Country ID (from NordVPN list):" 
-    read -r country_id < /dev/tty
+    echo "Enter the Country ID (from NordVPN list):"
+    read -r country_id
     echo "Enter the City ID (from NordVPN list):"
-    read -r city_id < /dev/tty
+    read -r city_id
     RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&filters%5Bcountry_id%5D=${country_id}&filters%5Bcity_id%5D=${city_id}&limit=5"
 else
     RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=5"
@@ -154,13 +154,13 @@ fi
 
 # --- Threshold Configuration ---
 echo "Threshold configuration:"
-echo "[1] Manual threshold"
-echo "[2] Auto-threshold calibration (calculate dynamically)"
-read -r thresh_option < /dev/tty
+echo "1) Manual threshold"
+echo "2) Auto-threshold calibration (calculate dynamically)"
+read -r thresh_option
 case "$thresh_option" in
     1)
         echo "Enter the manual SPEED_THRESHOLD (in Mbps):"
-        read -r manual_thresh < /dev/tty
+        read -r manual_thresh
         SPEED_THRESHOLD="$manual_thresh"
         ;;
     2)
@@ -175,44 +175,45 @@ esac
 # --- Scheduling Options ---
 prompt_for_cron() {
     echo "Choose scheduling frequency:"
-    echo "[1] Every X minutes"
-    echo "[2] Every X hours"
-    echo "[3] Daily"
-    echo "[4] Weekly"
-    echo "[5] Monthly"
-    read -r choice < /dev/tty
+    echo "1) Every X minutes"
+    echo "2) Every X hours"
+    echo "3) Daily"
+    echo "4) Weekly"
+    echo "5) Monthly"
+    echo -n "Enter choice: "
+    read -r choice
     case "$choice" in
         1)
-            echo "Enter the number of minutes (e.g., 15):"
-            read -r minutes < /dev/tty
+            echo -n "Enter the number of minutes (e.g., 15): "
+            read -r minutes
             echo "*/$minutes * * * *"
             ;;
         2)
-            echo "Enter the number of hours (e.g., 2):"
-            read -r hours < /dev/tty
+            echo -n "Enter the number of hours (e.g., 2): "
+            read -r hours
             echo "0 */$hours * * *"
             ;;
         3)
-            echo "Enter time in 24-hour format (HH:MM):"
-            read -r time_str < /dev/tty
+            echo -n "Enter time in 24-hour format (HH:MM): "
+            read -r time_str
             hour=$(echo "$time_str" | cut -d':' -f1)
             minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour * * *"
             ;;
         4)
-            echo "Enter day of week (0=Sunday, 6=Saturday):"
-            read -r dow < /dev/tty
-            echo "Enter time in 24-hour format (HH:MM):"
-            read -r time_str < /dev/tty
+            echo -n "Enter day of week (0=Sunday, 6=Saturday): "
+            read -r dow
+            echo -n "Enter time in 24-hour format (HH:MM): "
+            read -r time_str
             hour=$(echo "$time_str" | cut -d':' -f1)
             minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour * * $dow"
             ;;
         5)
-            echo "Enter day of month (1-31):"
-            read -r dom < /dev/tty
-            echo "Enter time in 24-hour format (HH:MM):"
-            read -r time_str < /dev/tty
+            echo -n "Enter day of month (1-31): "
+            read -r dom
+            echo -n "Enter time in 24-hour format (HH:MM): "
+            read -r time_str
             hour=$(echo "$time_str" | cut -d':' -f1)
             minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour $dom * *"
@@ -225,7 +226,7 @@ prompt_for_cron() {
 }
 
 echo "Do you want to schedule a Speed Test job? [Y/n]"
-read -r sched_speed_opt < /dev/tty
+read -r sched_speed_opt
 if [ -z "$sched_speed_opt" ] || echo "$sched_speed_opt" | grep -qi "^y"; then
     echo "Schedule for Speed Test:"
     SCHEDULE_SPEED=$(prompt_for_cron)
@@ -234,7 +235,7 @@ else
 fi
 
 echo "Do you want to schedule an Update job? [Y/n]"
-read -r sched_update_opt < /dev/tty
+read -r sched_update_opt
 if [ -z "$sched_update_opt" ] || echo "$sched_update_opt" | grep -qi "^y"; then
     echo "Schedule for Update:"
     SCHEDULE_UPDATE=$(prompt_for_cron)
@@ -323,7 +324,7 @@ fi
 # --- Auto-Threshold Immediate Run Option ---
 if [ "$thresh_option" = "2" ]; then
     echo "Do you want to run an auto-threshold speed test now? [Y/n]"
-    read -r run_now < /dev/tty
+    read -r run_now
     if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
         echo "Running auto-threshold speed test..."
         /bin/sh "$SCRIPT_PATH" "$CONFIG_FILE" --autothreshold --update
