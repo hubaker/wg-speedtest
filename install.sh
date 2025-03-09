@@ -278,7 +278,7 @@ cat "$CONFIG_FILE"
 # --- Download Main Script ---
 SCRIPT_PATH="/jffs/scripts/vpn-speedtest-monitor.sh"
 echo "Downloading vpn-speedtest-monitor.sh to $SCRIPT_PATH"
-wget -qO "$SCRIPT_PATH" "https://raw.githubusercontent.com/your_repo/vpn-speedtest-monitor.sh" || { echo "Download failed"; fail; }
+wget -qO "$SCRIPT_PATH" "https://raw.githubusercontent.com/hubaker/wg-speedtest/vpn-speedtest-monitor.sh" || { echo "Download failed"; fail; }
 chmod +x "$SCRIPT_PATH"
 echo -e "${col_g}vpn-speedtest-monitor.sh installed successfully${col_n}"
 
