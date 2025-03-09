@@ -14,9 +14,10 @@
 #
 # Additionally, there is an AutoThreshold mode (--autothreshold) which:
 #    - Runs 5 WAN speed tests to compute the average raw connection speed.
-#    - Fetches recommended servers (using RECOMMENDED_API_URL) using the WAN interface
-#      to ensure connectivity, extracts hostname, load, station (IP) and public key,
-#      and then applies the best candidate.
+#    - Uses the WAN interface to fetch recommended servers (via RECOMMENDED_API_URL),
+#      extracting hostname, load, station (IP), and public key.
+#    - For each candidate, it updates the VPN tunnel configuration (including the public key)
+#      before performing a tunnel speed test.
 #    - Calculates a dynamic threshold and updates the configuration file.
 #
 # Usage examples:
@@ -26,7 +27,6 @@
 #
 # Add the script to /jffs/scripts/ and make it executable:
 #       chmod a+rx /jffs/scripts/vpn-speedtest-monitor.sh
-#
 
 ###############################################################################
 #                             COLOR DEFINITIONS                               #
@@ -90,7 +90,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-if [ "$speedtest_mode" = false ] && [ "$update_mode" = false ] && [ "$autothreshold_mode" = false ]; then
+if [ "$speedtest_mode" = false ] && [ "$update_mode" = false ] && [ "$autothreshold" = false ]; then
     speedtest_mode=true
 fi
 
@@ -109,27 +109,13 @@ if [ -z "$SPEED_THRESHOLD" ]; then
     echo "SPEED_THRESHOLD is not defined in the config file."
     exit 1
 fi
-if [ -z "$MAX_ATTEMPTS" ]; then
-    MAX_ATTEMPTS=3
-fi
-if [ -z "$PING_COUNT" ]; then
-    PING_COUNT=3
-fi
-if [ -z "$PING_TIMEOUT" ]; then
-    PING_TIMEOUT=5
-fi
-if [ -z "$TEST_IP" ]; then
-    TEST_IP="8.8.8.8"
-fi
-if [ -z "$MAX_SERVERS" ]; then
-    MAX_SERVERS=5
-fi
-if [ -z "$LOG_FILE" ]; then
-    LOG_FILE="/var/log/vpn-speedtest.log"
-fi
-if [ -z "$RECOMMENDED_API_URL" ]; then
-    RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=${MAX_SERVERS}"
-fi
+[ -z "$MAX_ATTEMPTS" ] && MAX_ATTEMPTS=3
+[ -z "$PING_COUNT" ] && PING_COUNT=3
+[ -z "$PING_TIMEOUT" ] && PING_TIMEOUT=5
+[ -z "$TEST_IP" ] && TEST_IP="8.8.8.8"
+[ -z "$MAX_SERVERS" ] && MAX_SERVERS=5
+[ -z "$LOG_FILE" ] && LOG_FILE="/var/log/vpn-speedtest.log"
+[ -z "$RECOMMENDED_API_URL" ] && RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=${MAX_SERVERS}"
 
 wgc_enabled=$(nvram get "${CLIENT_INSTANCE}_enable")
 if [ -z "$wgc_enabled" ]; then
@@ -357,17 +343,20 @@ if [ "$autothreshold_mode" = true ]; then
     WAN_avg=$(echo "scale=2; $total_wan_speed / $num_tests" | bc)
     log "WAN average speed: $WAN_avg Mbps"
 
-    # Step 2: Test recommended servers via the WAN interface.
+    # Step 2: Test recommended servers via the WAN interface (including public key).
     orig_ep=$(nvram get "${CLIENT_INSTANCE}_ep_addr")
     orig_desc=$(nvram get "${CLIENT_INSTANCE}_desc")
-    curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .station' > /tmp/Peers.txt
+    orig_ppub=$(nvram get "${CLIENT_INSTANCE}_ppub")
+    curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r '.[] | .hostname, .station, ((.technologies[] | select(.identifier=="wireguard_udp") | (.metadata[]? | select(.name=="public_key") | .value)) // "")' > /tmp/Peers.txt
     rec_servers=""
     rec_ips=""
+    rec_pubkeys=""
     index=0
     while IFS= read -r line; do
-        case $(( index % 2 )) in
+        case $(( index % 3 )) in
             0) rec_servers="$rec_servers $line" ;;
             1) rec_ips="$rec_ips $line" ;;
+            2) rec_pubkeys="$rec_pubkeys $line" ;;
         esac
         index=$(( index + 1 ))
     done < /tmp/Peers.txt
@@ -377,9 +366,11 @@ if [ "$autothreshold_mode" = true ]; then
     j=1
     for server in $rec_servers; do
         ip=$(echo "$rec_ips" | awk -v idx="$j" '{print $idx}')
-        log "Testing tunnel speed for server: $server ($ip)"
+        pubkey=$(echo "$rec_pubkeys" | awk -v idx="$j" '{print $idx}')
+        log "Testing tunnel speed for server: $server ($ip) with Public Key: $pubkey"
         nvram set "${CLIENT_INSTANCE}_ep_addr"="$server"
         nvram set "${CLIENT_INSTANCE}_desc"="$server ($ip)"
+        nvram set "${CLIENT_INSTANCE}_ppub"="$pubkey"
         nvram commit
         service restart_wgc
         sleep 2
@@ -409,6 +400,7 @@ if [ "$autothreshold_mode" = true ]; then
 
     nvram set "${CLIENT_INSTANCE}_ep_addr"="$orig_ep"
     nvram set "${CLIENT_INSTANCE}_desc"="$orig_desc"
+    nvram set "${CLIENT_INSTANCE}_ppub"="$orig_ppub"
     nvram commit
 
     SPEED_THRESHOLD="$dynamic_threshold"
