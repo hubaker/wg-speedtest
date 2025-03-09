@@ -7,11 +7,13 @@
 #   - Ensure required tools (jq and bc) are installed (bc via Entware if needed).
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
-#   - Ask if you want to manually specify a threshold speed or use auto-threshold calibration.
+#     If specifying country/city, a numbered list of available countries is shown;
+#     then the cities for the selected country are shown.
+#   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
 #   - Ask separately for scheduling options for Speed Test and Update jobs using friendly options.
 #   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
-#   - If auto-threshold is chosen, run the main script immediately with --autothreshold --update.
+#   - If auto‑threshold is chosen, run the main script immediately with --autothreshold --update.
 #
 # Requirements: Asuswrt-Merlin router with JFFS enabled.
 
@@ -143,11 +145,44 @@ echo "Do you want to use the standard recommended servers? [Y/n]" > /dev/tty
 read -r use_standard < /dev/tty
 use_standard=$(echo "$use_standard" | tr '[:upper:]' '[:lower:]')
 if [ "$use_standard" = "n" ]; then
-    echo "Enter the Country ID (from NordVPN list):" > /dev/tty
-    read -r country_id < /dev/tty
-    echo "Enter the City ID (from NordVPN list):" > /dev/tty
-    read -r city_id < /dev/tty
-    RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&filters%5Bcountry_id%5D=${country_id}&filters%5Bcity_id%5D=${city_id}&limit=5"
+    echo "Fetching list of available countries..." > /dev/tty
+    country_list=$(curl --silent "https://api.nordvpn.com/v1/servers/countries" | jq -r '.[]
+      | "\(.name) [\(.id)]"')
+    echo "Available countries:" > /dev/tty
+    echo "$country_list" | awk '{print NR ") " $0}' > /tmp/countries.txt
+    cat /tmp/countries.txt > /dev/tty
+    echo -n "Enter the number for your chosen country: " > /dev/tty
+    read -r country_choice < /dev/tty
+    chosen_country_id=$(sed -n "${country_choice}p" /tmp/countries.txt | sed 's/.*\[\(.*\)\].*/\1/')
+    if [ -z "$chosen_country_id" ]; then
+        echo "Invalid country selection." > /dev/tty
+        rm /tmp/countries.txt
+        fail
+    fi
+    rm /tmp/countries.txt
+    echo "You selected country id: $chosen_country_id" > /dev/tty
+
+    echo "Fetching list of cities for the chosen country..." > /dev/tty
+    city_list=$(curl --silent "https://api.nordvpn.com/v1/servers/countries" | jq -r --arg cid "$chosen_country_id" 'map(select(.id==$cid)) | .[0].cities[] | "\(.name) [\(.id)]"')
+    if [ -z "$city_list" ]; then
+      echo "No cities found for the chosen country." > /dev/tty
+      fail
+    fi
+    echo "Available cities:" > /dev/tty
+    echo "$city_list" | awk '{print NR ") " $0}' > /tmp/cities.txt
+    cat /tmp/cities.txt > /dev/tty
+    echo -n "Enter the number for your chosen city: " > /dev/tty
+    read -r city_choice < /dev/tty
+    chosen_city_id=$(sed -n "${city_choice}p" /tmp/cities.txt | sed 's/.*\[\(.*\)\].*/\1/')
+    if [ -z "$chosen_city_id" ]; then
+        echo "Invalid city selection." > /dev/tty
+        rm /tmp/cities.txt
+        fail
+    fi
+    rm /tmp/cities.txt
+    echo "You selected city id: $chosen_city_id" > /dev/tty
+
+    RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&filters%5Bcountry_id%5D=${chosen_country_id}&filters%5Bcity_id%5D=${chosen_city_id}&limit=5"
 else
     RECOMMENDED_API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=5"
 fi
@@ -164,10 +199,10 @@ case "$thresh_option" in
         SPEED_THRESHOLD="$manual_thresh"
         ;;
     2)
-        SPEED_THRESHOLD="9999"  # Default for auto-threshold; will be updated.
+        SPEED_THRESHOLD="9999"  # Default value for auto-threshold; will be updated.
         ;;
     *)
-        echo -e "${col_r}Invalid selection.${col_n}" > /dev/tty
+        echo "Invalid selection." > /dev/tty
         fail
         ;;
 esac
@@ -283,8 +318,8 @@ RECOMMENDED_API_URL="${RECOMMENDED_API_URL}"
 EOF
 
 chmod +x "$CONFIG_FILE"
-echo -e "${col_g}Configuration file created at $CONFIG_FILE:${col_n}"
-cat "$CONFIG_FILE"
+echo -e "${col_g}Configuration file created at $CONFIG_FILE:${col_n}" > /dev/tty
+cat "$CONFIG_FILE" > /dev/tty
 
 # --- Download the Main Script ---
 SCRIPT_PATH="/jffs/scripts/vpn-speedtest-monitor.sh"
