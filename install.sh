@@ -140,13 +140,15 @@ done
 client_instance=$(echo "$clients" | awk -v idx="$index" '{print $idx}')
 echo -e "${col_g}Selected VPN client instance: ${client_instance}${col_n}"
 
-# --- Recommended Servers Selection ---
+# --- Recommended Servers Selection with Countries/Cities ---
 echo "Do you want to use the standard recommended servers? [Y/n]" > /dev/tty
 read -r use_standard < /dev/tty
 use_standard=$(echo "$use_standard" | tr '[:upper:]' '[:lower:]')
 if [ "$use_standard" = "n" ]; then
     echo "Fetching list of available countries..." > /dev/tty
-    country_list=$(curl --silent "https://api.nordvpn.com/v1/servers/countries" | jq -r '.[]
+    countries_json=$(curl --silent "https://api.nordvpn.com/v1/servers/countries")
+    # Build a numbered list of countries (showing name and ID)
+    country_list=$(echo "$countries_json" | jq -r '.[]
       | "\(.name) [\(.id)]"')
     echo "Available countries:" > /dev/tty
     echo "$country_list" | awk '{print NR ") " $0}' > /tmp/countries.txt
@@ -163,7 +165,8 @@ if [ "$use_standard" = "n" ]; then
     echo "You selected country id: $chosen_country_id" > /dev/tty
 
     echo "Fetching list of cities for the chosen country..." > /dev/tty
-    city_list=$(curl --silent "https://api.nordvpn.com/v1/servers/countries" | jq -r --arg cid "$chosen_country_id" 'map(select(.id==$cid)) | .[0].cities[] | "\(.name) [\(.id)]"')
+    # Use the stored JSON to extract cities for the chosen country.
+    city_list=$(echo "$countries_json" | jq -r --arg cid "$chosen_country_id" 'map(select(.id == ($cid|tonumber)))[0].cities[]? | "\(.name) [\(.id)]"')
     if [ -z "$city_list" ]; then
       echo "No cities found for the chosen country." > /dev/tty
       fail
