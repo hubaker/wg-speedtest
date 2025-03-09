@@ -8,7 +8,7 @@
 #   - List enabled WireGuard VPN (wgc) clients and let you choose one.
 #   - Ask if you want to use standard recommended servers or specify country/city.
 #   - Ask if you want to manually specify a threshold speed or use auto‑threshold calibration.
-#   - Ask separately for scheduling options for Speed Test and Update modes.
+#   - Ask separately for scheduling options for Speed Test and Update jobs using friendly options.
 #   - Create a unique configuration file (e.g., /jffs/scripts/vpn-monitor-wgc5.conf) that stores your settings.
 #   - Download vpn-speedtest-monitor.sh to /jffs/scripts and make it executable.
 #   - If auto‑threshold was chosen, run the main script immediately with --autothreshold --update.
@@ -219,7 +219,6 @@ prompt_for_cron() {
             echo "$minute $hour $dom * *"
             ;;
         *)
-            echo "Invalid option. No scheduling will be set."
             echo ""
             ;;
     esac
