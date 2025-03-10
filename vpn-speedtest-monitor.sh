@@ -130,26 +130,28 @@ SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5
 
 log() {
     message="$1"
-    color="$NC"
+    # Determine the color for console output.
     case "$message" in
         Debug:*)
-            color="$YELLOW" ;;
+            color="${YELLOW}" ;;
         *Warning:*)
-            color="$RED" ;;
+            color="${RED}" ;;
         "Starting VPN speed test"*)
-            color="$MAGENTA" ;;
+            color="${MAGENTA}" ;;
         *"Connectivity check succeeded"*)
-            color="$GREEN" ;;
+            color="${GREEN}" ;;
         *"Connectivity check failed"*)
-            color="$RED" ;;
+            color="${RED}" ;;
         *"Fetching new recommended servers"*)
-            color="$BLUE" ;;
+            color="${BLUE}" ;;
         *"Switching"*)
-            color="$CYAN" ;;
+            color="${CYAN}" ;;
         *)
-            color="$NC" ;;
+            color="${NC}" ;;
     esac
+    # Print colored message to console.
     echo -e "${color}${message}${NC}"
+    # Append plain text (without ANSI codes) with timestamp to the log file.
     echo "$(date +'%Y-%m-%d %H:%M:%S') - $message" >> "$LOG_FILE"
 }
 
