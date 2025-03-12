@@ -130,29 +130,32 @@ SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5
 
 log() {
     message="$1"
-    # Determine the color for console output.
+    # Choose a color for console output
     case "$message" in
         Debug:*)
-            color="${YELLOW}" ;;
+            color="\033[0;33m" ;;  # Yellow
         *Warning:*)
-            color="${RED}" ;;
+            color="\033[0;31m" ;;  # Red
         "Starting VPN speed test"*)
-            color="${MAGENTA}" ;;
+            color="\033[0;35m" ;;  # Magenta
         *"Connectivity check succeeded"*)
-            color="${GREEN}" ;;
+            color="\033[0;32m" ;;  # Green
         *"Connectivity check failed"*)
-            color="${RED}" ;;
+            color="\033[0;31m" ;;  # Red
         *"Fetching new recommended servers"*)
-            color="${BLUE}" ;;
+            color="\033[0;34m" ;;  # Blue
         *"Switching"*)
-            color="${CYAN}" ;;
+            color="\033[0;36m" ;;  # Cyan
         *)
-            color="${NC}" ;;
+            color="\033[0m" ;;
     esac
-    # Print colored message to console.
-    echo -e "${color}${message}${NC}"
-    # Append plain text (without ANSI codes) with timestamp to the log file.
-    echo "$(date +'%Y-%m-%d %H:%M:%S') - $message" >> "$LOG_FILE"
+
+    # Print colored output to the console
+    echo -e "${color}${message}\033[0m"
+
+    # Remove ANSI escape codes from message for logging (using sed)
+    plain_message=$(echo "$message" | sed 's/\x1B\[[0-9;]*[a-zA-Z]//g')
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - $plain_message" >> "$LOG_FILE"
 }
 
 ###############################################################################
