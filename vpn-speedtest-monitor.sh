@@ -130,33 +130,34 @@ SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5
 
 log() {
     message="$1"
-    # Choose a color for console output
+    # Determine the color for console output.
     case "$message" in
         Debug:*)
-            color="\033[0;33m" ;;  # Yellow
+            color="\033[0;33m$message\033[0m" ;;  # Yellow
         *Warning:*)
-            color="\033[0;31m" ;;  # Red
+            color="\033[0;31m$message\033[0m" ;;  # Red
         "Starting VPN speed test"*)
-            color="\033[0;35m" ;;  # Magenta
+            color="\033[0;35m$message\033[0m" ;;  # Magenta
         *"Connectivity check succeeded"*)
-            color="\033[0;32m" ;;  # Green
+            color="\033[0;32m$message\033[0m" ;;  # Green
         *"Connectivity check failed"*)
-            color="\033[0;31m" ;;  # Red
+            color="\033[0;31m$message\033[0m" ;;  # Red
         *"Fetching new recommended servers"*)
-            color="\033[0;34m" ;;  # Blue
-        *"Switching"*)
-            color="\033[0;36m" ;;  # Cyan
+            color="\033[0;34m$message\033[0m" ;;  # Blue
+        *"Applying server"*)
+            color="\033[0;36m$message\033[0m" ;;  # Cyan
         *)
-            color="\033[0m" ;;
+            color="\033[0m$message" ;;
     esac
-
-    # Print colored output to the console
-    echo -e "${color}${message}\033[0m"
-
-    # Remove ANSI escape codes from message for logging (using sed)
-    plain_message=$(echo "$message" | sed 's/\x1B\[[0-9;]*[a-zA-Z]//g')
+    # Console output (no timestamp)
+    echo -e "$color"
+    # Remove ANSI escape sequences.
+    ESC=$(printf "\033")
+    plain_message=$(echo -e "$color" | sed -r "s/${ESC}\[[0-9;]*[a-zA-Z]//g")
     echo "$(date +'%Y-%m-%d %H:%M:%S') - $plain_message" >> "$LOG_FILE"
 }
+
+
 
 ###############################################################################
 #                          UTILITY FUNCTIONS                                  #

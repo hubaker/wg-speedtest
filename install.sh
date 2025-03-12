@@ -303,7 +303,8 @@ PING_TIMEOUT=5
 ###############################################################################
 #                           FILE LOCATIONS                                    #
 ###############################################################################
-LOG_FILE="/var/log/vpn-speedtest.log"
+# Use one unified log file for this client instance.
+LOG_FILE="/var/log/vpn-speedtest-monitor-${client_instance}.log"
 MAX_LOG_SIZE=10485760
 CACHE_FILE="/tmp/vpn-speedtest.cache"
 LOCK_FILE="/tmp/vpn-speedtest.lock"
@@ -334,9 +335,8 @@ echo -e "${col_g}vpn-speedtest-monitor.sh installed successfully.${col_n}" > /de
 # --- Schedule the Scripts if Requested ---
 if [ -n "$SCHEDULE_SPEED" ] && [ "$SCHEDULE_SPEED" != "Invalid" ]; then
     JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
-    LOG_FILE_SPEED="/var/log/vpn-speedtest-monitor-${client_instance}-speed.log"
     sed -i "/$JOB_ID_SPEED/d" /jffs/scripts/services-start
-    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > $LOG_FILE_SPEED 2>&1\""
+    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH $CONFIG_FILE --speedtest > /dev/null 2>&1\""
     echo "Adding Speed Test schedule: $CRU_CMD_SPEED" > /dev/tty
     eval "$CRU_CMD_SPEED"
     echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
@@ -347,9 +347,8 @@ fi
 
 if [ -n "$SCHEDULE_UPDATE" ] && [ "$SCHEDULE_UPDATE" != "Invalid" ]; then
     JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
-    LOG_FILE_UPDATE="/var/log/vpn-speedtest-monitor-${client_instance}-update.log"
     sed -i "/$JOB_ID_UPDATE/d" /jffs/scripts/services-start
-    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > $LOG_FILE_UPDATE 2>&1\""
+    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH $CONFIG_FILE --update > /dev/null 2>&1\""
     echo "Adding Update schedule: $CRU_CMD_UPDATE" > /dev/tty
     eval "$CRU_CMD_UPDATE"
     echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
