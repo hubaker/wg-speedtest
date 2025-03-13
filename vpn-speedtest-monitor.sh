@@ -6,24 +6,23 @@
 #
 # Usage examples:
 #
-#   Installation mode (prompts for interface selection and creates new files):
+#   Installation mode (prompts for interface selection; deletes old files and forces update):
 #       sh vpn-speedtest-monitor.sh --install
 #
 #   Change location mode:
-#       sh vpn-speedtest-monitor.sh wg5 --changelocation
+#       sh vpn-speedtest-monitor.sh wgc5 --changelocation
 #
-#   Monitoring mode (update, speedtest, auto-threshold, etc.):
-#       sh vpn-speedtest-monitor.sh wg5 --update
-#       sh vpn-speedtest-monitor.sh wg5 --speedtest
-#       sh vpn-speedtest-monitor.sh wg5 --autothreshold --update --debug
+#   Monitoring mode (update, speedtest, auto‑threshold, etc.):
+#       sh vpn-speedtest-monitor.sh wgc5 --update
+#       sh vpn-speedtest-monitor.sh wgc5 --speedtest
+#       sh vpn-speedtest-monitor.sh wgc5 --autothreshold --update --debug
 #
-#   Uninstall mode (removes all config, log, and cron entries):
+#   Uninstall mode (removes config, logs, and cron entries):
 #       sh vpn-speedtest-monitor.sh --uninstall
 #
-# In monitoring and change-location modes, the first parameter is the VPN client
-# interface name (e.g., wg5) and the corresponding configuration file is
-# /jffs/scripts/vpn-monitor-<interface>.conf.
-
+# In non‑install modes the first parameter must be a simple interface name
+# (e.g. "wgc5"). Do not pass a full path.
+ 
 set -e
 
 ###############################################################################
@@ -128,20 +127,14 @@ ping_latency() {
 ###############################################################################
 uninstall_script() {
     echo "Uninstalling VPN Speed Test Monitor..."
-    # Remove cron job entries matching vpn-speedtest-monitor-
     if [ -f /jffs/scripts/services-start ]; then
         sed -i '/vpn-speedtest-monitor-/d' /jffs/scripts/services-start
         echo "Removed cron job entries from /jffs/scripts/services-start"
     fi
-
-    # Remove configuration files
     rm -f /jffs/scripts/vpn-monitor-*.conf
     echo "Removed configuration files (/jffs/scripts/vpn-monitor-*.conf)"
-
-    # Remove log files
     rm -f /var/log/vpn-speedtest-monitor-*.log
     echo "Removed log files (/var/log/vpn-speedtest-monitor-*.log)"
-
     echo "Uninstallation complete."
     exit 0
 }
@@ -261,7 +254,7 @@ install_script() {
         fi
     fi
 
-    # Uninstall any existing configuration, log, and cron entries.
+    # Uninstall any existing config, log, and cron entries.
     printf "%b\n" "Removing existing VPN monitor configuration files, log files, and cron entries..." > /dev/tty
     sed -i '/vpn-speedtest-monitor-/d' /jffs/scripts/services-start
     rm -f /jffs/scripts/vpn-monitor-*.conf
@@ -443,12 +436,16 @@ EOF
         printf "%b\n" "${YELLOW}No Update scheduled task set up.${NC}" > /dev/tty
     fi
 
+    # Always force an update after installation.
+    printf "%b\n" "Forcing VPN configuration update after installation..." > /dev/tty
+    sh "$0" "${client_instance}" --update
+
     if [ "$thresh_option" = "2" ]; then
         printf "%b\n" "Do you want to run an auto-threshold speed test now? [Y/n]" > /dev/tty
         read -r run_now < /dev/tty
         if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
             printf "%b\n" "Running auto-threshold speed test..." > /dev/tty
-            sh "$0" "$CONFIG_FILE" --autothreshold --update
+            sh "$0" "${client_instance}" --autothreshold --update
         fi
     fi
 
@@ -458,12 +455,14 @@ EOF
 ###############################################################################
 #                CHANGE LOCATION LOGIC (--changelocation)
 ###############################################################################
+# In change-location mode, the first argument must be the interface name.
 change_location() {
     if [ -z "$1" ]; then
-        printf "%b\n" "Usage: $0 --changelocation <config_file>" > /dev/tty
+        printf "%b\n" "Usage: $0 <interface> --changelocation" > /dev/tty
         exit 1
     fi
-    CONFIG_FILE="$1"
+    interface="$1"
+    CONFIG_FILE="/jffs/scripts/vpn-monitor-${interface}.conf"
     if [ ! -f "$CONFIG_FILE" ]; then
         printf "%b\n" "Config file not found: $CONFIG_FILE" > /dev/tty
         exit 1
@@ -514,7 +513,7 @@ change_location() {
     grep '^RECOMMENDED_API_URL=' "$CONFIG_FILE" > /dev/tty
 
     printf "%b\n" "Forcing VPN configuration update with new location..." > /dev/tty
-    sh "$0" "$CONFIG_FILE" --update
+    sh "$0" "$interface" --update
 }
 
 ###############################################################################
@@ -798,31 +797,22 @@ main_monitor() {
 ###############################################################################
 #                           MAIN ENTRY POINT
 ###############################################################################
-# Check for uninstall flag.
+# For non-install modes, the first argument must be a simple interface name.
 if [ "$1" = "--uninstall" ]; then
     uninstall_script
 fi
 
-# If first argument is --install, run install mode.
 if [ "$1" = "--install" ]; then
     install_script
     exit 0
 fi
 
-# If second argument is --changelocation, use the first argument (interface)
-# to derive the config file.
-if [ "$2" = "--changelocation" ]; then
-    interface="$1"
-    CONFIG_FILE="/jffs/scripts/vpn-monitor-${interface}.conf"
-    change_location "$CONFIG_FILE"
-    exit 0
-fi
-
-# Otherwise, the first argument is the interface name.
-if [ -z "$1" ]; then
-    echo "Usage: $0 --install | --uninstall | <interface> [--changelocation] | <interface> [--speedtest --update --autothreshold --debug]"
+# Enforce that the first argument does not contain a slash.
+if echo "$1" | grep -q "/"; then
+    echo "Error: Please provide the interface name (e.g., \"wgc5\"), not a full path."
     exit 1
 fi
+
 interface="$1"
 CONFIG_FILE="/jffs/scripts/vpn-monitor-${interface}.conf"
 shift
