@@ -38,26 +38,32 @@ NC='\033[0m'
 ###############################################################################
 log() {
     message="$1"
+    # Determine the color for console output using hardcoded ANSI codes.
     case "$message" in
         Debug:*)
-            colored_message="${YELLOW}$message${NC}" ;;
+            colored_message="\033[0;33m$message\033[0m" ;;  # Yellow
         *Warning:*)
-            colored_message="${RED}$message${NC}" ;;
+            colored_message="\033[0;31m$message\033[0m" ;;  # Red
         "Starting VPN speed test"*)
-            colored_message="${MAGENTA}$message${NC}" ;;
+            colored_message="\033[0;35m$message\033[0m" ;;  # Magenta
         *"Connectivity check succeeded"*)
-            colored_message="${GREEN}$message${NC}" ;;
+            colored_message="\033[0;32m$message\033[0m" ;;  # Green
         *"Connectivity check failed"*)
-            colored_message="${RED}$message${NC}" ;;
+            colored_message="\033[0;31m$message\033[0m" ;;  # Red
         *"Fetching new recommended servers"*)
-            colored_message="${BLUE}$message${NC}" ;;
+            colored_message="\033[0;34m$message\033[0m" ;;  # Blue
         *"Applying server"*)
-            colored_message="${CYAN}$message${NC}" ;;
+            colored_message="\033[0;36m$message\033[0m" ;;  # Cyan
         *)
             colored_message="$message" ;;
     esac
+
+    # Print the colored message to the console (without timestamp).
     echo -e "$colored_message"
-    plain_message=$(echo -e "$colored_message" | sed -r 's/\x1B\[[0-9;]*[a-zA-Z]//g')
+
+    # Use a variable for the ESC character and sed with a regex to strip ANSI codes.
+    ESC=$(printf "\033")
+    plain_message=$(echo -e "$colored_message" | sed -r "s/${ESC}\[[0-9;]*[a-zA-Z]//g")
     echo "$(date +'%Y-%m-%d %H:%M:%S') - $plain_message" >> "$LOG_FILE"
 }
 
