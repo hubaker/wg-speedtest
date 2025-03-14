@@ -2,27 +2,24 @@
 # vpn-speedtest-monitor.sh
 #
 # Combined VPN Speed Test/Update Script with Installation, Change Location,
-# Monitoring, and Uninstall Modes.
+# and Monitoring Modes.
 #
 # Usage examples:
 #
-#   Installation mode (prompts for interface selection; deletes old files and forces update):
+#   Installation mode (prompts for interface selection):
 #       sh vpn-speedtest-monitor.sh --install
 #
 #   Change location mode:
-#       sh vpn-speedtest-monitor.sh wgc5 --changelocation
+#       sh vpn-speedtest-monitor.sh wg5 --changelocation
 #
-#   Monitoring mode (update, speedtest, auto‑threshold, etc.):
-#       sh vpn-speedtest-monitor.sh wgc5 --update
-#       sh vpn-speedtest-monitor.sh wgc5 --speedtest
-#       sh vpn-speedtest-monitor.sh wgc5 --autothreshold --update --debug
+#   Monitoring mode (update, speedtest, auto-threshold, etc.):
+#       sh vpn-speedtest-monitor.sh wg5 --update
+#       sh vpn-speedtest-monitor.sh wg5 --speedtest
+#       sh vpn-speedtest-monitor.sh wg5 --autothreshold --update --debug
 #
-#   Uninstall mode (removes config, logs, and cron entries):
-#       sh vpn-speedtest-monitor.sh --uninstall
-#
-# In non‑install modes the first parameter must be a simple interface name
-# (e.g. "wgc5"). Do not pass a full path.
- 
+# The first parameter (when not in install mode) is the VPN client interface name,
+# and the configuration file is assumed to be /jffs/scripts/vpn-monitor-<interface>.conf.
+
 set -e
 
 ###############################################################################
@@ -123,23 +120,6 @@ ping_latency() {
 }
 
 ###############################################################################
-#                    UNINSTALLATION LOGIC (--uninstall)
-###############################################################################
-uninstall_script() {
-    echo "Uninstalling VPN Speed Test Monitor..."
-    if [ -f /jffs/scripts/services-start ]; then
-        sed -i '/vpn-speedtest-monitor-/d' /jffs/scripts/services-start
-        echo "Removed cron job entries from /jffs/scripts/services-start"
-    fi
-    rm -f /jffs/scripts/vpn-monitor-*.conf
-    echo "Removed configuration files (/jffs/scripts/vpn-monitor-*.conf)"
-    rm -f /var/log/vpn-speedtest-monitor-*.log
-    echo "Removed log files (/var/log/vpn-speedtest-monitor-*.log)"
-    echo "Uninstallation complete."
-    exit 0
-}
-
-###############################################################################
 #                    INSTALLATION LOGIC (--install)
 ###############################################################################
 prompt_for_cron() {
@@ -188,6 +168,7 @@ prompt_for_cron() {
 }
 
 install_script() {
+    # In install mode, we list available WG clients and prompt for selection.
     echo "Starting installation..." > /dev/tty
 
     # System Checks
@@ -253,13 +234,6 @@ install_script() {
             exit 1
         fi
     fi
-
-    # Uninstall any existing config, log, and cron entries.
-    printf "%b\n" "Removing existing VPN monitor configuration files, log files, and cron entries..." > /dev/tty
-    sed -i '/vpn-speedtest-monitor-/d' /jffs/scripts/services-start
-    rm -f /jffs/scripts/vpn-monitor-*.conf
-    rm -f /var/log/vpn-speedtest-monitor-*.log
-    printf "%b\n" "${GREEN}Old files removed.${NC}" > /dev/tty
 
     # List Enabled WireGuard VPN Clients
     nordvpn_addr_regex="^wgc[[:digit:]]+_ep_addr="
@@ -436,16 +410,12 @@ EOF
         printf "%b\n" "${YELLOW}No Update scheduled task set up.${NC}" > /dev/tty
     fi
 
-    # Always force an update after installation.
-    printf "%b\n" "Forcing VPN configuration update after installation..." > /dev/tty
-    sh "$0" "${client_instance}" --update
-
     if [ "$thresh_option" = "2" ]; then
         printf "%b\n" "Do you want to run an auto-threshold speed test now? [Y/n]" > /dev/tty
         read -r run_now < /dev/tty
         if [ -z "$run_now" ] || echo "$run_now" | grep -qi "^y"; then
             printf "%b\n" "Running auto-threshold speed test..." > /dev/tty
-            sh "$0" "${client_instance}" --autothreshold --update
+            sh "$0" ${client_instance} --autothreshold --update
         fi
     fi
 
@@ -455,8 +425,8 @@ EOF
 ###############################################################################
 #                CHANGE LOCATION LOGIC (--changelocation)
 ###############################################################################
-# In change-location mode, the first argument must be the interface name.
 change_location() {
+    # Now the first argument is the interface name.
     if [ -z "$1" ]; then
         printf "%b\n" "Usage: $0 <interface> --changelocation" > /dev/tty
         exit 1
@@ -468,10 +438,11 @@ change_location() {
         exit 1
     fi
     printf "%b\n" "Changing location in config file: $CONFIG_FILE" > /dev/tty
+
+    # Fetch available countries
     printf "%b\n" "Fetching list of available countries..." > /dev/tty
     countries_json=$(curl --silent "https://api.nordvpn.com/v1/servers/countries")
-    country_list=$(echo "$countries_json" | jq -r '.[]
-        | "\(.name) [\(.id)]"')
+    country_list=$(echo "$countries_json" | jq -r '.[] | "\(.name) [\(.id)]"')
     printf "%b\n" "Available countries:" > /dev/tty
     echo "$country_list" | awk '{print NR ") " $0}' > /tmp/countries.txt
     cat /tmp/countries.txt > /dev/tty
@@ -486,6 +457,7 @@ change_location() {
     rm /tmp/countries.txt
     printf "You selected country id: %s\n" "$chosen_country_id" > /dev/tty
 
+    # Fetch available cities
     printf "%b\n" "Fetching list of cities for the chosen country..." > /dev/tty
     city_list=$(echo "$countries_json" | jq -r --arg cid "$chosen_country_id" 'map(select(.id == ($cid|tonumber)))[0] | (.cities // [])[] | "\(.name) [\(.id)]"')
     if [ -z "$city_list" ]; then
@@ -513,6 +485,7 @@ change_location() {
     grep '^RECOMMENDED_API_URL=' "$CONFIG_FILE" > /dev/tty
 
     printf "%b\n" "Forcing VPN configuration update with new location..." > /dev/tty
+    # Now call update mode using the interface name (not the config file path).
     sh "$0" "$interface" --update
 }
 
@@ -664,124 +637,237 @@ main_monitor() {
 
     update_triggered=false
 
-    if [ "$autothreshold_mode" = true ]; then
-        log "Running auto-threshold calibration..."
+if [ "$autothreshold_mode" = true ]; then
+    log "Running auto-threshold calibration..."
 
-        WAN_IF=$(nvram get wan0_ifname)
-        WAN_SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I $WAN_IF -f json"
-        total_wan_speed=0
-        num_tests=5
-        i=1
-        while [ $i -le $num_tests ]; do
-            result=$($WAN_SPEEDTEST_CMD 2>/dev/null)
-            spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth')
-            if echo "$spd" | grep -qE '^[0-9]+$'; then
-                spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
-                total_wan_speed=$(echo "$total_wan_speed + $spd_mbps" | bc)
-            else
-                log "Warning: Invalid WAN speed test result: $spd"
+    # (1) Measure WAN speed over 5 tests.
+    WAN_IF=$(nvram get wan0_ifname)
+    WAN_SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I $WAN_IF -f json"
+    if [ "$debug_mode" = true ]; then
+        log "Debug: WAN_SPEEDTEST_CMD: $WAN_SPEEDTEST_CMD"
+    fi
+    total_wan_speed=0
+    num_tests=1
+    i=1
+    while [ $i -le $num_tests ]; do
+        result=$($WAN_SPEEDTEST_CMD 2>/dev/null)
+        if [ "$debug_mode" = true ]; then
+            log "Debug: WAN test iteration $i raw output: $result"
+        fi
+        spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth' 2>/dev/null)
+        if [ "$debug_mode" = true ]; then
+            log "Debug: WAN test iteration $i parsed bandwidth: $spd"
+        fi
+        if echo "$spd" | grep -qE '^[0-9]+$'; then
+            spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
+            if [ "$debug_mode" = true ]; then
+                log "Debug: WAN test iteration $i converted speed: $spd_mbps Mbps"
             fi
-            i=$(( i + 1 ))
-        done
-        WAN_avg=$(echo "scale=2; $total_wan_speed / $num_tests" | bc)
-        log "WAN average speed: $WAN_avg Mbps"
+            total_wan_speed=$(echo "$total_wan_speed + $spd_mbps" | bc)
+        else
+            log "Warning: Invalid WAN speed test result: $spd"
+        fi
+        i=$(( i + 1 ))
+    done
+    WAN_avg=$(echo "scale=2; $total_wan_speed / $num_tests" | bc)
+    log "WAN average speed: $WAN_avg Mbps"
 
-        orig_ep=$(nvram get "${CLIENT_INSTANCE}_ep_addr")
-        orig_desc=$(nvram get "${CLIENT_INSTANCE}_desc")
-        orig_ppub=$(nvram get "${CLIENT_INSTANCE}_ppub")
-        curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r \
-            '.[] | .hostname, .station, ((.technologies[] | select(.identifier=="wireguard_udp") | (.metadata[]? | select(.name=="public_key") | .value)) // "")' > /tmp/Peers.txt
-        rec_servers=""
-        rec_ips=""
-        rec_pubkeys=""
-        index=0
+    # (2) Test recommended servers over the VPN tunnel.
+    # Save original VPN settings to restore later.
+    orig_ep=$(nvram get "${CLIENT_INSTANCE}_ep_addr")
+    orig_desc=$(nvram get "${CLIENT_INSTANCE}_desc")
+    orig_ppub=$(nvram get "${CLIENT_INSTANCE}_ppub")
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Fetching recommended servers with command:"
+        log "   curl -s --interface $WAN_IF \"$RECOMMENDED_API_URL\" | /opt/usr/bin/jq -r '.[] | .hostname, .station, ((.technologies[] | select(.identifier==\"wireguard_udp\") | (.metadata[]? | select(.name==\"public_key\") | .value)) // \"\")'"
+    fi
+
+    curl -s --interface "$WAN_IF" "$RECOMMENDED_API_URL" | /opt/usr/bin/jq -r \
+         '.[] | .hostname, .station, ((.technologies[] | select(.identifier=="wireguard_udp") | (.metadata[]? | select(.name=="public_key") | .value)) // "")' > /tmp/Peers.txt
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Raw recommended servers output:"
         while IFS= read -r line; do
-            case $(( index % 3 )) in
-                0) rec_servers="$rec_servers $line" ;;
-                1) rec_ips="$rec_ips $line" ;;
-                2) rec_pubkeys="$rec_pubkeys $line" ;;
-            esac
-            index=$(( index + 1 ))
+            log "   $line"
         done < /tmp/Peers.txt
-        rm /tmp/Peers.txt
-        total_tunnel_speed=0
-        tunnel_count=0
-        j=1
-        for server in $rec_servers; do
-            ip=$(echo "$rec_ips" | awk -v idx="$j" '{print $idx}')
-            pubkey=$(echo "$rec_pubkeys" | awk -v idx="$j" '{print $idx}')
-            log "Testing tunnel speed for server: $server ($ip) with Public Key: $pubkey"
-            nvram set "${CLIENT_INSTANCE}_ep_addr"="$server"
-            nvram set "${CLIENT_INSTANCE}_desc"="$server ($ip)"
-            nvram set "${CLIENT_INSTANCE}_ppub"="$pubkey"
-            nvram commit
-            service restart_wgc
-            sleep 2
-            result=$($SPEEDTEST_CMD 2>/dev/null)
-            spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth')
-            if echo "$spd" | grep -qE '^[0-9]+$'; then
-                spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
-                total_tunnel_speed=$(echo "$total_tunnel_speed + $spd_mbps" | bc)
-                tunnel_count=$(( tunnel_count + 1 ))
-                log "  Speed: $spd_mbps Mbps"
-            else
-                log "Warning: Invalid tunnel speed test for server $server: $spd"
-            fi
-            j=$(( j + 1 ))
-        done
-        if [ $tunnel_count -gt 0 ]; then
-            Tunnel_avg=$(echo "scale=2; $total_tunnel_speed / $tunnel_count" | bc)
-        else
-            Tunnel_avg=0
-        fi
-        log "Tunnel average speed: $Tunnel_avg Mbps"
-
-        overhead=$(echo "$WAN_avg - $Tunnel_avg" | bc)
-        dynamic_threshold=$(echo "scale=2; $Tunnel_avg - ($overhead * 0.5)" | bc)
-        log "Calculated dynamic threshold: $dynamic_threshold Mbps"
-
-        nvram set "${CLIENT_INSTANCE}_ep_addr"="$orig_ep"
-        nvram set "${CLIENT_INSTANCE}_desc"="$orig_desc"
-        nvram set "${CLIENT_INSTANCE}_ppub"="$orig_ppub"
-        nvram commit
-
-        SPEED_THRESHOLD="$dynamic_threshold"
-        sed -i "s/^SPEED_THRESHOLD=.*/SPEED_THRESHOLD=\"$dynamic_threshold\"/" "$CONFIG_FILE"
-        log "Config file updated with new SPEED_THRESHOLD."
-
-        speedtest_mode=true
     fi
 
+    rec_servers=""
+    rec_ips=""
+    rec_pubkeys=""
+    index=0
+    while IFS= read -r line; do
+         case $(( index % 3 )) in
+              0) rec_servers="$rec_servers $line" ;;
+              1) rec_ips="$rec_ips $line" ;;
+              2) rec_pubkeys="$rec_pubkeys $line" ;;
+         esac
+         index=$(( index + 1 ))
+    done < /tmp/Peers.txt
+    rm /tmp/Peers.txt
+
+    if [ "$debug_mode" = true ]; then
+         log "Debug: Parsed recommended servers:"
+         log "   Servers: $rec_servers"
+         log "   IPs: $rec_ips"
+         log "   Public Keys: $rec_pubkeys"
+    fi
+
+    total_tunnel_speed=0
+    tunnel_count=0
+    j=1
+    for server in $rec_servers; do
+         ip=$(echo "$rec_ips" | awk -v idx="$j" '{print $idx}')
+         pubkey=$(echo "$rec_pubkeys" | awk -v idx="$j" '{print $idx}')
+         log "Testing tunnel speed for server: $server ($ip) with Public Key: $pubkey"
+         nvram set "${CLIENT_INSTANCE}_ep_addr"="$server"
+         nvram set "${CLIENT_INSTANCE}_desc"="$server ($ip)"
+         nvram set "${CLIENT_INSTANCE}_ppub"="$pubkey"
+         nvram commit
+         service restart_wgc
+         # Wait longer for the tunnel to stabilize.
+         sleep 5
+
+         # Reinitialize SPEEDTEST_CMD to ensure CLIENT_INSTANCE is set.
+         SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I ${CLIENT_INSTANCE} -f json"
+         if [ "$debug_mode" = true ]; then
+              log "Debug: Tunnel speed test command: $SPEEDTEST_CMD"
+         fi
+         result=$($SPEEDTEST_CMD 2>/dev/null)
+         if [ -z "$result" ]; then
+              log "Debug: SPEED_JSON empty, trying fallback speedtest command without interface."
+              FALLBACK_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -f json"
+              result=$($FALLBACK_CMD 2>/dev/null)
+         fi
+         if [ "$debug_mode" = true ]; then
+              log "Debug: Tunnel speed test raw output: $result"
+         fi
+         spd=$(echo "$result" | /opt/usr/bin/jq -r '.download.bandwidth' 2>/dev/null)
+         if [ "$debug_mode" = true ]; then
+              log "Debug: Tunnel speed test parsed bandwidth: $spd"
+         fi
+         if echo "$spd" | grep -qE '^[0-9]+$'; then
+              spd_mbps=$(echo "$spd" | awk '{printf "%.2f", $1 / 125000}')
+              log "  Speed: $spd_mbps Mbps"
+              total_tunnel_speed=$(echo "$total_tunnel_speed + $spd_mbps" | bc)
+              tunnel_count=$(( tunnel_count + 1 ))
+         else
+              log "Warning: Invalid tunnel speed test for server $server: $spd"
+         fi
+         j=$(( j + 1 ))
+    done
+    if [ $tunnel_count -gt 0 ]; then
+         Tunnel_avg=$(echo "scale=2; $total_tunnel_speed / $tunnel_count" | bc)
+    else
+         Tunnel_avg=0
+         log "Warning: No valid tunnel speed tests. Auto-threshold calibration failed."
+         exit 1
+    fi
+    log "Tunnel average speed: $Tunnel_avg Mbps"
+
+    # (3) Calculate dynamic threshold.
+    overhead=$(echo "$WAN_avg - $Tunnel_avg" | bc)
+    dynamic_threshold=$(echo "scale=2; $Tunnel_avg - ($overhead * 0.5)" | bc)
+    log "Calculated dynamic threshold: $dynamic_threshold Mbps"
+
+    # Restore original VPN configuration.
+    nvram set "${CLIENT_INSTANCE}_ep_addr"="$orig_ep"
+    nvram set "${CLIENT_INSTANCE}_desc"="$orig_desc"
+    nvram set "${CLIENT_INSTANCE}_ppub"="$orig_ppub"
+    nvram commit
+
+    SPEED_THRESHOLD="$dynamic_threshold"
+    sed -i "s/^SPEED_THRESHOLD=.*/SPEED_THRESHOLD=\"$dynamic_threshold\"/" "$CONFIG_FILE"
+    log "Config file updated with new SPEED_THRESHOLD."
+
+    # Force a speed test using the new threshold.
+    speedtest_mode=true
+fi
     update_triggered=false
-    if [ "$speedtest_mode" = true ]; then
-        log "Starting VPN speed test"
+if [ "$speedtest_mode" = true ]; then
+    log "Starting VPN speed test"
+
+    # Define the command used for the speed test
+    SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -I $CLIENT_INSTANCE -f json"
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Speedtest Settings:"
+        log "  - CLIENT_INSTANCE: $CLIENT_INSTANCE"
+        log "  - Speedtest command: $SPEEDTEST_CMD"
+    fi
+
+    # Execute the speed test and capture the output
+    SPEED_JSON=$($SPEEDTEST_CMD 2>/dev/null)
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Raw speed test JSON output:"
+        log "$SPEED_JSON"
+    fi
+
+    # If the output is empty, retry without the interface option
+    if [ -z "$SPEED_JSON" ]; then
+        log "Warning: SPEED_JSON is empty! Retrying speed test without interface..."
+        sleep 5
+        SPEEDTEST_CMD="/usr/sbin/ookla -c https://www.speedtest.net/api/embed/vz0azjarf5enop8a/config -f json"
+        log "Debug: Retrying with command: $SPEEDTEST_CMD"
         SPEED_JSON=$($SPEEDTEST_CMD 2>/dev/null)
-        SPEED_RESULT=$(echo "$SPEED_JSON" | /opt/usr/bin/jq -r '.download.bandwidth')
-        if ! echo "$SPEED_RESULT" | grep -qE '^[0-9]+$'; then
-            log "Warning: Invalid speed test result: $SPEED_RESULT"
-            exit 1
-        fi
-        SPEED_Mbps=$(echo "$SPEED_RESULT" | awk '{printf "%.2f", $1 / 125000}')
-        speedComp1=$(less_than "$SPEED_Mbps" 100)
-        speedComp2=$(less_than "$SPEED_Mbps" 200)
-        if [ "$speedComp1" -eq 1 ]; then
-            colored_speed="${RED}${SPEED_Mbps}${NC}"
-        elif [ "$speedComp2" -eq 1 ]; then
-            colored_speed="${YELLOW}${SPEED_Mbps}${NC}"
-        else
-            colored_speed="${GREEN}${SPEED_Mbps}${NC}"
-        fi
-        log "Current VPN Download Speed: $colored_speed Mbps"
-        log ""
-        speedCheck=$(bc_strip "$SPEED_Mbps < $SPEED_THRESHOLD")
-        if [ "$speedCheck" -eq 1 ]; then
-            log "Speed is below threshold ($SPEED_THRESHOLD Mbps). Updating VPN configuration..."
-            update_vpn_config
-            update_triggered=true
-        else
-            log "Speed is acceptable. No VPN update triggered by speed test."
+        if [ "$debug_mode" = true ]; then
+            log "Debug: Fallback JSON output:"
+            log "$SPEED_JSON"
         fi
     fi
+
+    # Extract download speed from JSON
+    SPEED_RESULT=$(echo "$SPEED_JSON" | /opt/usr/bin/jq -r '.download.bandwidth' 2>/dev/null)
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Parsed speed result: $SPEED_RESULT"
+    fi
+
+    # Handle invalid results
+    if ! echo "$SPEED_RESULT" | grep -qE '^[0-9]+$'; then
+        log "Error: Invalid speed test result: $SPEED_RESULT"
+        exit 1
+    fi
+
+    # Convert to Mbps
+    SPEED_Mbps=$(echo "$SPEED_RESULT" | awk '{printf "%.2f", $1 / 125000}')
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: Converted speed (Mbps): $SPEED_Mbps"
+    fi
+
+    # Colorize speed results
+    speedComp1=$(less_than "$SPEED_Mbps" 100)
+    speedComp2=$(less_than "$SPEED_Mbps" 200)
+
+    if [ "$speedComp1" -eq 1 ]; then
+        colored_speed="${RED}${SPEED_Mbps}${NC}"
+    elif [ "$speedComp2" -eq 1 ]; then
+        colored_speed="${YELLOW}${SPEED_Mbps}${NC}"
+    else
+        colored_speed="${GREEN}${SPEED_Mbps}${NC}"
+    fi
+
+    log "Current VPN Download Speed: $colored_speed Mbps"
+
+    # Check if the speed is below the threshold
+    speedCheck=$(bc_strip "$SPEED_Mbps < $SPEED_THRESHOLD")
+
+    if [ "$debug_mode" = true ]; then
+        log "Debug: SPEED_THRESHOLD: $SPEED_THRESHOLD"
+        log "Debug: Speed comparison result: $speedCheck"
+    fi
+
+    if [ "$speedCheck" -eq 1 ]; then
+        log "Speed is below threshold ($SPEED_THRESHOLD Mbps). Updating VPN configuration..."
+        update_vpn_config
+        update_triggered=true
+    else
+        log "Speed is acceptable. No VPN update triggered by speed test."
+    fi
+fi
 
     if [ "$update_mode" = true ] && [ "$update_triggered" = false ]; then
         log "Forcing VPN configuration update..."
@@ -797,7 +883,7 @@ main_monitor() {
 ###############################################################################
 #                           MAIN ENTRY POINT
 ###############################################################################
-# For non-install modes, the first argument must be a simple interface name.
+# If first argument is --uninstall, run uninstall.
 if [ "$1" = "--uninstall" ]; then
     uninstall_script
 fi
@@ -807,12 +893,18 @@ if [ "$1" = "--install" ]; then
     exit 0
 fi
 
-# Enforce that the first argument does not contain a slash.
-if echo "$1" | grep -q "/"; then
-    echo "Error: Please provide the interface name (e.g., \"wgc5\"), not a full path."
-    exit 1
+if [ "$2" = "--changelocation" ]; then
+    # Here, the first argument is the interface name.
+    interface="$1"
+    change_location "$interface"
+    exit 0
 fi
 
+# Otherwise, the first argument is the interface name.
+if [ -z "$1" ]; then
+    echo "Usage: $0 --install | <interface> [--changelocation] | <interface> [--speedtest --update --autothreshold --debug]"
+    exit 1
+fi
 interface="$1"
 CONFIG_FILE="/jffs/scripts/vpn-monitor-${interface}.conf"
 shift
