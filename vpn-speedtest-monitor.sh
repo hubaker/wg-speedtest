@@ -58,15 +58,14 @@ log() {
             colored_message="$message" ;;
     esac
 
-    # Print the colored message to the console (without timestamp).
+    # Print the colored message to the console.
     echo -e "$colored_message"
 
-    # Use a variable for the ESC character and sed with a regex to strip ANSI codes.
+    # Strip ANSI color codes for the log file.
     ESC=$(printf "\033")
-    plain_message=$(echo -e "$colored_message" | sed -r "s/${ESC}\[[0-9;]*[a-zA-Z]//g")
+    plain_message=$(echo -e "$colored_message" | sed -E "s/${ESC}\[[0-9;]*m//g")
     echo "$(date +'%Y-%m-%d %H:%M:%S') - $plain_message" >> "$LOG_FILE"
 }
-
 ###############################################################################
 #                        HELPER FUNCTIONS (WORKING LOGIC)
 ###############################################################################
@@ -126,50 +125,138 @@ ping_latency() {
 }
 
 ###############################################################################
+#                    UNINSTALLATION LOGIC (--uninstall)
+###############################################################################
+uninstall_script() {
+    echo "Uninstalling VPN Speed Test Monitor..."
+    if [ -f /jffs/scripts/services-start ]; then
+        # Remove cron jobs from the cron daemon.
+        for job in $(grep -o 'vpn-speedtest-monitor-[^ ]*' /jffs/scripts/services-start | sort -u); do
+            cru d "$job"
+        done
+        # Delete the lines from services-start.
+        sed -i '/vpn-speedtest-monitor-/d' /jffs/scripts/services-start
+        echo "Removed cron job entries from /jffs/scripts/services-start"
+    fi
+    rm -f /jffs/scripts/vpn-monitor-*.conf
+    echo "Removed configuration files (/jffs/scripts/vpn-monitor-*.conf)"
+    rm -f /var/log/vpn-speedtest-monitor-*.log
+    echo "Removed log files (/var/log/vpn-speedtest-monitor-*.log)"
+    echo "Uninstallation complete."
+    exit 0
+}
+
+
+
+###############################################################################
 #                    INSTALLATION LOGIC (--install)
 ###############################################################################
 prompt_for_cron() {
-    echo "Choose scheduling frequency:" > /dev/tty
-    echo "1) Every X minutes" > /dev/tty
-    echo "2) Every X hours" > /dev/tty
-    echo "3) Daily" > /dev/tty
-    echo "4) Weekly" > /dev/tty
-    echo "5) Monthly" > /dev/tty
-    echo -n "Enter choice: " > /dev/tty
-    read -r choice < /dev/tty
+    local choice=""
+    # Loop until a valid scheduling frequency is entered.
+    while true; do
+        echo "Choose scheduling frequency:" > /dev/tty
+        echo "1) Every X minutes" > /dev/tty
+        echo "2) Every X hours" > /dev/tty
+        echo "3) Daily" > /dev/tty
+        echo "4) Weekly" > /dev/tty
+        echo "5) Monthly" > /dev/tty
+        echo -n "Enter choice (1-5): " > /dev/tty
+        read -r choice < /dev/tty
+        if echo "$choice" | grep -qE '^[1-5]$'; then
+            break
+        else
+            echo "Invalid choice. Please enter a number between 1 and 5." > /dev/tty
+        fi
+    done
+
     case "$choice" in
         1)
-            echo -n "Enter the number of minutes (e.g., 15): " > /dev/tty
-            read -r minutes < /dev/tty
+            local minutes=""
+            while true; do
+                echo -n "Enter the number of minutes (e.g., 15): " > /dev/tty
+                read -r minutes < /dev/tty
+                if echo "$minutes" | grep -qE '^[1-9][0-9]*$'; then
+                    break
+                else
+                    echo "Invalid minutes value. Please enter a positive integer." > /dev/tty
+                fi
+            done
             echo "*/$minutes * * * *" ;;
         2)
-            echo -n "Enter the number of hours (e.g., 2): " > /dev/tty
-            read -r hours < /dev/tty
+            local hours=""
+            while true; do
+                echo -n "Enter the number of hours (e.g., 2): " > /dev/tty
+                read -r hours < /dev/tty
+                if echo "$hours" | grep -qE '^[1-9][0-9]*$'; then
+                    break
+                else
+                    echo "Invalid hours value. Please enter a positive integer." > /dev/tty
+                fi
+            done
             echo "0 */$hours * * *" ;;
         3)
-            echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
-            read -r time_str < /dev/tty
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            local time_str=""
+            while true; do
+                echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
+                read -r time_str < /dev/tty
+                if echo "$time_str" | grep -qE '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'; then
+                    break
+                else
+                    echo "Invalid time format. Please use HH:MM in 24-hour format." > /dev/tty
+                fi
+            done
+            local hour=$(echo "$time_str" | cut -d':' -f1)
+            local minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour * * *" ;;
         4)
-            echo -n "Enter day of week (0=Sunday,...,6=Saturday): " > /dev/tty
-            read -r dow < /dev/tty
-            echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
-            read -r time_str < /dev/tty
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            local dow=""
+            while true; do
+                echo -n "Enter day of week (0=Sunday,...,6=Saturday): " > /dev/tty
+                read -r dow < /dev/tty
+                if echo "$dow" | grep -qE '^[0-6]$'; then
+                    break
+                else
+                    echo "Invalid day of week. Please enter a number between 0 and 6." > /dev/tty
+                fi
+            done
+            local time_str=""
+            while true; do
+                echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
+                read -r time_str < /dev/tty
+                if echo "$time_str" | grep -qE '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'; then
+                    break
+                else
+                    echo "Invalid time format. Please use HH:MM in 24-hour format." > /dev/tty
+                fi
+            done
+            local hour=$(echo "$time_str" | cut -d':' -f1)
+            local minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour * * $dow" ;;
         5)
-            echo -n "Enter day of month (1-31): " > /dev/tty
-            read -r dom < /dev/tty
-            echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
-            read -r time_str < /dev/tty
-            hour=$(echo "$time_str" | cut -d':' -f1)
-            minute=$(echo "$time_str" | cut -d':' -f2)
+            local dom=""
+            while true; do
+                echo -n "Enter day of month (1-31): " > /dev/tty
+                read -r dom < /dev/tty
+                if echo "$dom" | grep -qE '^(0?[1-9]|[12][0-9]|3[01])$'; then
+                    break
+                else
+                    echo "Invalid day of month. Please enter a number between 1 and 31." > /dev/tty
+                fi
+            done
+            local time_str=""
+            while true; do
+                echo -n "Enter time in 24-hour format (HH:MM): " > /dev/tty
+                read -r time_str < /dev/tty
+                if echo "$time_str" | grep -qE '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'; then
+                    break
+                else
+                    echo "Invalid time format. Please use HH:MM in 24-hour format." > /dev/tty
+                fi
+            done
+            local hour=$(echo "$time_str" | cut -d':' -f1)
+            local minute=$(echo "$time_str" | cut -d':' -f2)
             echo "$minute $hour $dom * *" ;;
-        *)
-            echo "" ;;
     esac
 }
 
@@ -394,27 +481,35 @@ EOF
 
     sed -i "/vpn-speedtest-monitor-${client_instance}-/d" /jffs/scripts/services-start
 
-    if [ -n "$SCHEDULE_SPEED" ] && [ "$SCHEDULE_SPEED" != "Invalid" ]; then
-        JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
-        CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh \$0 \$CONFIG_FILE --speedtest > /dev/null 2>&1\""
-        printf "%b\n" "Adding Speed Test schedule: $CRU_CMD_SPEED" > /dev/tty
-        eval "$CRU_CMD_SPEED"
-        echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
-        printf "%b\n" "${GREEN}Speed Test scheduled task set up.${NC}" > /dev/tty
-    else
-        printf "%b\n" "${YELLOW}No Speed Test scheduled task set up.${NC}" > /dev/tty
-    fi
+if [ -n "$SCHEDULE_SPEED" ] && [ "$SCHEDULE_SPEED" != "Invalid" ]; then
+    JOB_ID_SPEED="vpn-speedtest-monitor-${client_instance}-speed"
+    SCRIPT_PATH="/jffs/scripts/vpn-speedtest-monitor.sh"
+    CRU_CMD_SPEED="cru a $JOB_ID_SPEED \"$SCHEDULE_SPEED /bin/sh $SCRIPT_PATH \$CONFIG_FILE --speedtest\""
 
-    if [ -n "$SCHEDULE_UPDATE" ] && [ "$SCHEDULE_UPDATE" != "Invalid" ]; then
-        JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
-        CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh \$0 \$CONFIG_FILE --update > /dev/null 2>&1\""
-        printf "%b\n" "Adding Update schedule: $CRU_CMD_UPDATE" > /dev/tty
-        eval "$CRU_CMD_UPDATE"
-        echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
-        printf "%b\n" "${GREEN}Update scheduled task set up.${NC}" > /dev/tty
-    else
-        printf "%b\n" "${YELLOW}No Update scheduled task set up.${NC}" > /dev/tty
-    fi
+    printf "%b\n" "Adding Speed Test schedule: $CRU_CMD_SPEED" > /dev/tty
+    eval "$CRU_CMD_SPEED"
+    echo "$CRU_CMD_SPEED" >> /jffs/scripts/services-start
+    printf "%b\n" "${GREEN}Speed Test scheduled task set up.${NC}" > /dev/tty
+else
+    printf "%b\n" "${YELLOW}No Speed Test scheduled task set up.${NC}" > /dev/tty
+fi
+
+    
+    # Always force an update after installation.
+    printf "%b\n" "Forcing VPN configuration update after installation..." > /dev/tty
+    sh "$0" "${client_instance}" --update
+
+if [ -n "$SCHEDULE_UPDATE" ] && [ "$SCHEDULE_UPDATE" != "Invalid" ]; then
+    JOB_ID_UPDATE="vpn-speedtest-monitor-${client_instance}-update"
+    CRU_CMD_UPDATE="cru a $JOB_ID_UPDATE \"$SCHEDULE_UPDATE /bin/sh $SCRIPT_PATH \$CONFIG_FILE --update\""
+    printf "%b\n" "Adding Update schedule: $CRU_CMD_UPDATE" > /dev/tty
+    eval "$CRU_CMD_UPDATE"
+    echo "$CRU_CMD_UPDATE" >> /jffs/scripts/services-start
+    printf "%b\n" "${GREEN}Update scheduled task set up.${NC}" > /dev/tty
+else
+    printf "%b\n" "${YELLOW}No Update scheduled task set up.${NC}" > /dev/tty
+fi
+
 
     if [ "$thresh_option" = "2" ]; then
         printf "%b\n" "Do you want to run an auto-threshold speed test now? [Y/n]" > /dev/tty
@@ -444,7 +539,7 @@ change_location() {
         exit 1
     fi
     printf "%b\n" "Changing location in config file: $CONFIG_FILE" > /dev/tty
-
+ 
     # Fetch available countries
     printf "%b\n" "Fetching list of available countries..." > /dev/tty
     countries_json=$(curl --silent "https://api.nordvpn.com/v1/servers/countries")
@@ -492,7 +587,7 @@ change_location() {
 
     printf "%b\n" "Forcing VPN configuration update with new location..." > /dev/tty
     # Now call update mode using the interface name (not the config file path).
-    sh "$0" "$interface" --update
+    sh /jffs/scripts/vpn-speedtest-monitor.sh "$interface" --update
 }
 
 ###############################################################################
@@ -908,10 +1003,15 @@ fi
 
 # Otherwise, the first argument is the interface name.
 if [ -z "$1" ]; then
-    echo "Usage: $0 --install | <interface> [--changelocation] | <interface> [--speedtest --update --autothreshold --debug]"
+    echo "Usage: $0 --install | <interface or config file> [--changelocation] | <interface or config file> [--speedtest --update --autothreshold --debug]"
     exit 1
 fi
-interface="$1"
-CONFIG_FILE="/jffs/scripts/vpn-monitor-${interface}.conf"
+
+# Use the provided argument directly if it's an absolute path
+if echo "$1" | grep -q "^/"; then
+    CONFIG_FILE="$1"
+else
+    CONFIG_FILE="/jffs/scripts/vpn-monitor-${1}.conf"
+fi
 shift
 main_monitor "$CONFIG_FILE" "$@"
